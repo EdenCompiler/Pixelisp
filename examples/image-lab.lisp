@@ -1,0 +1,78 @@
+;;;; A small transform workbench. Generated art keeps the example self-contained.
+(in-package #:pixelisp.examples)
+
+(defun %image-lab-source ()
+  "Make a colorful test card with smooth areas and sharp shapes for edge finding."
+  ;; An opaque source keeps the Laplacian preview visible after its alpha
+  ;; channel is filtered along with RGB.
+  (let ((image (px.surface:make-surface '(280 280))))
+    (dotimes (y 280)
+      (dotimes (x 280)
+        (px.surface:set-at image (list x y)
+          (list (+ 25 (mod (+ (* x 2) y) 190))
+                (+ 25 (mod (+ x (* y 2)) 190))
+                (+ 35 (mod (+ x y) 180)) 255))))
+    (px.draw:circle image '(245 238 178) '(76 82) 48)
+    (px.draw:rect image '(34 48 80) '(128 34 112 94) :border-radius 10)
+    (px.draw:polygon image '(230 82 72) '((46 190) (104 151) (118 232) (60 250)))
+    (px.draw:line image '(245 248 250) '(145 174) '(252 248) :width 5)
+    image))
+
+(defun image-lab (&key frames (fps 60))
+  "Open a side-by-side transform demo. Press G for grayscale, T for threshold,
+and C for color; Escape or closing the window exits. FRAMES bounds the loop."
+  (when (and frames (or (not (integerp frames)) (minusp frames)))
+    (error "FRAMES must be a nonnegative integer or NIL."))
+  (check-type fps (integer 1 *))
+  (px:with-init ()
+    (let* ((screen (px.display:set-mode '(720 420) :title "Pixelisp — Image Lab"))
+           (clock (px.time:make-clock))
+           (font (px.font:make-font nil 20))
+           (background (px.surface:make-surface '(720 420)))
+           (running t) (mode :color))
+      (unwind-protect
+           (px:with-resource (original (%image-lab-source))
+             ;; Compute every preview once. The event loop only blits cached art.
+             (px:with-resource (gray (px.transform:grayscale original))
+               (px:with-resource (binary (px.surface:copy gray))
+                 (px.transform:threshold binary gray '(128 128 128 255)
+                                          :threshold '(35 35 35 255)
+                                          :set-color '(245 245 245 255)
+                                          :set-behavior 1)
+                 (px:with-resource (color-edges (px.transform:laplacian original))
+                   (px:with-resource (gray-edges (px.transform:laplacian gray))
+                     (px:with-resource (binary-edges (px.transform:laplacian binary))
+                       (let* ((original-label (px.font:render font "Source image" t '(235 240 248)))
+                              (edge-label (px.font:render font "Laplacian edges" t '(235 240 248)))
+                              (help (px.font:render font "G: grayscale   T: threshold   C: color   Esc: quit"
+                                                    t '(185 198 214))))
+                         (px.surface:fill background '(18 25 39))
+                         (px.draw:rect background '(31 42 61) '(20 20 680 365) :border-radius 14)
+                         (px.surface:blit background original-label '(60 42))
+                         (px.surface:blit background edge-label '(378 42))
+                         (px.surface:blit background help '(60 356))
+                         (loop for frame from 0
+                               while (and running (or (null frames) (< frame frames)))
+                               do (px.time:tick clock fps)
+                                  (dolist (event (px.event:get))
+                                    (when (eq (px.event:type event) :quit)
+                                      (setf running nil))
+                                    (when (and (eq (px.event:type event) :key-down)
+                                               (eq (px.event:attribute event :key) :escape))
+                                      (setf running nil))
+                                    (when (and (eq (px.event:type event) :key-down)
+                                               (member (px.event:attribute event :key) '(:g :t :c)))
+                                      (setf mode (case (px.event:attribute event :key)
+                                                   (:g :grayscale) (:t :threshold) (:c :color)))))
+                                  (px.surface:blit screen background '(0 0))
+                                  (px.surface:blit screen (case mode
+                                                           (:grayscale gray)
+                                                           (:threshold binary)
+                                                           (otherwise original)) '(56 70))
+                                  (px.surface:blit screen (case mode
+                                                           (:grayscale gray-edges)
+                                                           (:threshold binary-edges)
+                                                           (otherwise color-edges)) '(374 70))
+                                  (px.display:flip))))))))
+        (px:dispose background)
+        (px:dispose font))))))

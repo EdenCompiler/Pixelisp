@@ -1,0 +1,33 @@
+(in-package #:pixelisp.tests)
+(in-suite pixelisp)
+
+(test vector-move-towards
+  (let* ((start (px.math:make-vector2 0 0))
+         (target '(3 4))
+         (step (px.math:move-towards start target 2)))
+    (is (equal '(0 0) (px.math:components start)))
+    (is (< (abs (- 1.2 (px.math:x step))) 1d-9))
+    (is (< (abs (- 1.6 (px.math:y step))) 1d-9))
+    (is (equal '(3 4) (px.math:components (px.math:move-towards start target 20))))
+    ;; Negative steps head away from the target, matching pygame Vector2.
+    (let ((away (px.math:move-towards start target -2)))
+      (is (< (abs (+ 1.2 (px.math:x away))) 1d-9))
+      (is (< (abs (+ 1.6 (px.math:y away))) 1d-9)))
+    (is (equal '(0 0) (px.math:components (px.math:move-towards start start 2)))))
+  (let ((value (px.math:make-vector3 0 0 0)))
+    (is (eq value (px.math:move-towards-ip value '(0 0 3) 1)))
+    (is (< (abs (- 1 (px.math:z value))) 1d-9))
+    (is (zerop (px.math:x value)))
+    (is (zerop (px.math:y value)))))
+
+(test vector-clamp-magnitude-bounds
+  (let ((value (px.math:make-vector2 3 4)))
+    (let ((within-bounds (px.math:clamp-magnitude value 6 2)))
+      (is (< (abs (- 3 (px.math:x within-bounds))) 1d-9))
+      (is (< (abs (- 4 (px.math:y within-bounds))) 1d-9)))
+    (is (< (abs (- 2 (px.math:length (px.math:clamp-magnitude value 2)))) 1d-9))
+    (is (zerop (px.math:length (px.math:clamp-magnitude value 0))))
+    (signals error (px.math:clamp-magnitude value 1 2))
+    (signals error (px.math:clamp-magnitude (px.math:make-vector2 0 0) 2 1))
+    (is (eq value (px.math:clamp-magnitude-ip value 2)))
+    (is (< (abs (- 2 (px.math:length value))) 1d-9))))

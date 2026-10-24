@@ -1,0 +1,47 @@
+(in-package #:pixelisp.tests)
+(in-suite pixelisp)
+
+(test color-hsva-property-and-alpha-preservation
+  (let ((color (px:make-color 255 0 0 17)))
+    (is (equal '(0 100 100) (subseq (px.color:hsva color) 0 3)))
+    (is (listp (px.color:hsva color)))
+    (setf (px.color:hsva color) #(120 100 100))
+    (is (equal '(0 255 0 17) (px.color:to-list color)))
+    (setf (px.color:hsva color) '(240 100 100 50))
+    (is (equal '(0 0 255 127) (px.color:to-list color)))
+    (is (equal '(240 100 100) (subseq (px.color:hsva color) 0 3)))
+    (let ((before (px.color:to-list color)))
+      (signals error (setf (px.color:hsva color) '(361 100 100)))
+      (is (equal before (px.color:to-list color))))))
+
+(test color-hsla-property-and-alpha-preservation
+  (let ((color (px:make-color 128 64 32 99)))
+    (is (< (abs (- (second (px.color:hsla color)) 60)) 1d-8))
+    (is (< (abs (- (third (px.color:hsla color)) 31.372549)) 1d-5))
+    (setf (px.color:hsla color) #(120 100 50))
+    (is (equal '(0 255 0 99) (px.color:to-list color)))
+    (setf (px.color:hsla color) '(240 100 50 0))
+    (is (equal '(0 0 255 0) (px.color:to-list color)))
+    (signals error (setf (px.color:hsla color) '(0 0 101)))))
+
+(test color-normalized-cmy-property
+  (let ((color (px:make-color 128 64 32 91)))
+    (is (equal '(0 1 1) (px.color:cmy (px:make-color 255 0 0))))
+    (setf (px.color:cmy color) #(0 1 1))
+    (is (equal '(255 0 0 91) (px.color:to-list color)))
+    (let ((before (px.color:to-list color)))
+      (signals error (setf (px.color:cmy color) '(0 -0.1 1)))
+      (is (equal before (px.color:to-list color))))))
+
+(test color-gamma-returns-fresh-color-and-corrects-alpha
+  (let* ((original (px:make-color 128 64 32 99))
+         (corrected (px.color:correct-gamma original 0.5)))
+    (is (not (eq original corrected)))
+    (is (equal '(181 128 90 159) (px.color:to-list corrected)))
+    (is (equal '(128 64 32 99) (px.color:to-list original)))
+    (is (equal '(255 255 255 255)
+               (px.color:to-list (px.color:correct-gamma original 0))))
+    (is (equal '(255 255 255 255)
+               (px.color:to-list (px.color:correct-gamma original -1))))
+    (is (equal '(255 255 255 255)
+               (px.color:to-list (px.color:correct-gamma (px:make-color 0 1 128 255) -1d300))))))

@@ -1,0 +1,91 @@
+(in-package #:pixelisp.tests)
+(in-suite pixelisp)
+
+(test rectangle-anchor-properties
+  (let ((r (px:make-rect 10 20 7 5)))
+    (is (equal '(10 20) (px.rect:top-left r)))
+    (is (equal '(17 20) (px.rect:top-right r)))
+    (is (equal '(10 25) (px.rect:bottom-left r)))
+    (is (equal '(17 25) (px.rect:bottom-right r)))
+    (is (equal '(13 20) (px.rect:mid-top r)))
+    (is (equal '(10 22) (px.rect:mid-left r)))
+    (is (equal '(13 25) (px.rect:mid-bottom r)))
+    (is (equal '(17 22) (px.rect:mid-right r)))
+    (setf (px.rect:top-left r) '(1 2))
+    (is (equal '(1 2 7 5) (list (px.rect:x r) (px.rect:y r)
+                                  (px.rect:width r) (px.rect:height r))))
+    (setf (px.rect:mid-right r) '(30 40))
+    (is (equal '(30 40) (px.rect:mid-right r)))
+    (setf (px.rect:bottom-left r) '(4 9))
+    (is (equal '(4 9) (px.rect:bottom-left r)))
+    ;; Both coordinates are converted before either side changes.
+    (signals type-error (setf (px.rect:top-left r) '(99 invalid)))
+    (is (equal '(4 4) (px.rect:top-left r)))))
+
+(test rectangle-fit-preserves-aspect-and-centers
+  (let* ((source (px:make-rect 50 60 100 100))
+         (target (px:make-rect 3 4 30 10))
+         (fitted (px.rect:fit source target)))
+    (is (equal '(13 4 10 10) (list (px.rect:x fitted) (px.rect:y fitted)
+                                    (px.rect:width fitted) (px.rect:height fitted))))
+    (is (equal '(50 60 100 100) (list (px.rect:x source) (px.rect:y source)
+                                      (px.rect:width source) (px.rect:height source))))
+    (is (equal '(18 4 0 10)
+               (let ((empty (px.rect:fit (px:make-rect 0 0 0 5) target)))
+                 (list (px.rect:x empty) (px.rect:y empty)
+                       (px.rect:width empty) (px.rect:height empty)))))
+    (is (equal '(3 9 30 0)
+               (let ((flat (px.rect:fit (px:make-rect 0 0 5 0) target)))
+                 (list (px.rect:x flat) (px.rect:y flat)
+                       (px.rect:width flat) (px.rect:height flat)))))))
+
+(test rectangle-clipline-clips-exclusive-boundaries
+  (let ((r (px:make-rect 10 10 10 10)))
+    (is (equal '((10 15) (19 15)) (px.rect:clipline r '(-5 15 30 15))))
+    (is (equal '((10 10) (10 10)) (px.rect:clipline r '(0 0 10 10))))
+    ;; Fractional intersections follow integer truncation, including reversed
+    ;; segment direction, as pygame does.
+    (is (equal '((0 4) (3 8))
+               (px.rect:clipline (px:make-rect 0 0 10 10) '(-3 1 3 8))))
+    (is (equal '((0 5) (3 1))
+               (px.rect:clipline (px:make-rect 0 0 10 10) '(-3 8 3 1))))
+    (is (equal '((19 19) (10 10)) (px.rect:clipline r '(20 20 0 0))))
+    (is (null (px.rect:clipline r '(0 9 20 9))))
+    (is (null (px.rect:clipline r '(20 10 20 20))))
+    (is (equal '((15 15) (15 15)) (px.rect:clipline r '((15 15) (15 15)))))
+    (is (equal '((10 10) (19 19))
+               (px.rect:clipline r '(0 0) '(20 20))))
+    (is (null (px.rect:clipline (px:make-rect 0 0 0 5) '(0 0 1 1))))))
+
+(test rectangle-collide-list-all-returns-every-index
+  (let ((r (px:make-rect 0 0 10 10)))
+    (is (equal '(1 3) (px.rect:collide-list-all
+                       r (list (px:make-rect 10 0 1 1)
+                               (px:make-rect 9 9 2 2)
+                               (px:make-rect 0 10 1 1)
+                               (px:make-rect 1 1 1 1)))))
+    (is (null (px.rect:collide-list-all r nil)))))
+
+(test rectangle-fit-rounding-and-signed-sizes
+  (let ((outer (px:make-rect 1 1 8 8)))
+    (dolist (fixture '(((3 2) (1 2 8 5)) ((2 3) (2 1 5 8))
+                       ((-5 3) (11 1 -13 8)) ((5 -3) (1 7 8 -4))))
+      (let ((result (px.rect:fit (apply #'px:make-rect 0 0 (first fixture)) outer)))
+        (is (equal (second fixture)
+                   (list (px.rect:x result) (px.rect:y result)
+                         (px.rect:width result) (px.rect:height result))))))
+    ;; A completely empty source stays empty rather than dividing by zero.
+    (is (equal '(5 5 0 0)
+               (let ((result (px.rect:fit (px:make-rect 0 0 0 0) outer)))
+                 (list (px.rect:x result) (px.rect:y result)
+                       (px.rect:width result) (px.rect:height result)))))))
+
+(test rectangle-clipline-truncates-input-and-normalizes-a-copy
+  (let ((bounds (px:make-rect 0 0 10 10)))
+    (is (equal '((0 4) (3 8)) (px.rect:clipline bounds #(-3.9 -1.9 3.9 8.9))))
+    (is (equal '((3 0) (0 4)) (px.rect:clipline bounds #(3.9 -1.9 -3.9 8.9)))))
+  (let ((bounds (px:make-rect 5 5 -10 10)))
+    (is (equal '((-5 7) (4 7)) (px.rect:clipline bounds '(-10 7 10 7))))
+    (is (= -10 (px.rect:width bounds))))
+  (is (equal '((7 -5) (7 4))
+             (px.rect:clipline (px:make-rect 5 5 10 -10) '(7 -10 7 10)))))

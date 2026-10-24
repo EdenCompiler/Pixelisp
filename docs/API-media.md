@@ -1,0 +1,90 @@
+# Image, font, and sound APIs
+
+Pixelisp exposes SDL_image, SDL_ttf, SDL_mixer, and an optional direct FreeType renderer through ordinary Common Lisp packages. The main system loads `px.image`, `px.font`, `px.mixer`, `px.mixer.music`, and `px.sndarray`; the separate `pixelisp/freetype` system adds `px.freetype` and the `px.ftfont` compatibility facade. Loading a system does not initialize an audio device. Image and font operations initialize their SDL helper library when needed.
+
+## Images
+
+`(px.image:load source &key namehint)` decodes an image and returns an owned
+`px.surface:surface`. SOURCE may be a pathname, string path, encoded
+`(unsigned-byte 8)` vector, or binary input stream. For encoded memory data,
+`:namehint` can supply a codec/extension such as `"PNG"` or `"icon.png"` when
+SDL_image needs a format hint. The hint is ASCII alphanumeric (an extension is
+accepted); supported codecs depend on the linked SDL_image build. Streams remain
+open and owned by the caller. Loaded pixels are normalized into the drawing
+API's surface format, so dispose the returned surface when finished.
+`load-bytes` explicitly decodes encoded image-file bytes. `from-bytes` is an
+alias for `from-string` and copies raw packed pixel bytes using the selected
+dimensions and channel order; it does not decode a PNG/JPEG file.
+
+`(px.image:save surface pathname &key (quality 90))` chooses PNG, JPEG, or BMP from the pathname extension. JPEG quality is an integer from 0 to 100. PNG and BMP are lossless; JPEG discards color detail.
+
+`from-string` and `from-bytes` copy packed pixel data into a new surface. `to-string` and `to-bytes` copy pixels out as a specialized `(unsigned-byte 8)` vector. Both functions take dimensions as `(width height)` and a channel order such as `:rgb`, `:rgba`, `:rgbx`, `:argb`, `:bgra`, or `:bgr`. A true `flipped` argument reverses row order. Alpha is 255 for formats without an alpha channel.
+
+```lisp
+(let* ((pixels (make-array 16 :element-type '(unsigned-byte 8)
+                           :initial-contents '(255 0 0 255 0 255 0 255
+                                               0 0 255 255 255 255 255 255)))
+       (image (px.image:from-bytes pixels '(2 2) :rgba)))
+  (unwind-protect
+       (px.image:save image #P"output.png")
+    (px:dispose image)))
+```
+
+`from-buffer` shares a foreign-memory allocation with SDL instead of copying it. Pass `:owner` to keep the allocation's owning Lisp object reachable. The allocation must be valid and writable until the surface is disposed; a moving Lisp vector is not suitable storage. Shared imports require a supported 32-bit byte order (`:rgba`, `:bgra`, `:argb`, or `:rgbx`). For ordinary Lisp vectors, use `from-string`.
+
+`get-sdl-image-version` reports the linked SDL_image version. `get-extended` reports that the extended image codecs are available through the linked library.
+
+## SDL_ttf fonts
+
+`(px.font:make-font pathname point-size)` opens a font and returns a managed resource. A NIL pathname selects the bundled DejaVu Sans font, with the system sans font as a fallback. `px.font:sys-font` resolves a family name through fontconfig and accepts `:bold` and `:italic`. `px.sysfont` re-exports the system-font lookup functions.
+
+Use `size` to measure UTF-8 text, `metrics` to inspect per-character glyph bounds and advance, and `render` to produce a surface. `render` takes an antialias flag and foreground color; an optional background color selects shaded rendering. Empty text returns a transparent surface. Font style accessors include `get-bold`/`set-bold`, `get-italic`/`set-italic`, `get-underline`/`set-underline`, and `get-strikethrough`/`set-strikethrough`. `get-height`, `get-linesize`, `get-ascent`, and `get-descent` expose font metrics.
+
+Fonts are native resources: use `px:dispose` or `px.font:close`, or place them in `px:with-resource`. After disposal, later use signals `px:disposed-resource`. `px.font:quit` disposes open fonts before quitting SDL_ttf. The optional `px.ftfont` facade offers the familiar SDL_ttf-style constructor and renderer backed by the direct FreeType implementation.
+
+## Mixer and music
+
+Call `px.mixer:init` before loading or playing sounds. It opens SDL_mixer's shared audio device and accepts `:frequency`, `:size`, `:channels`, and `:buffer`; supported sample sizes are 8, -8, 16, -16, and -32 bits. `pre-init` stores defaults for the next initialization, while `get-init` returns the active frequency, signed sample size, and channel count.
+
+Mixer shutdown is repeatable. Read-only playback queries return their idle value when the mixer is closed (`get-busy` is false, `get-pos` is -1, and the channel count is zero); operations that need an open mixer signal `px:initialization-error`. `px.font:quit` also closes fonts and is safe to call more than once.
+
+`(px.mixer:make-sound pathname)` loads a decoded WAV sample. `px.sndarray:make-sound` copies a specialized Lisp array into mixer-owned sample storage; mono samples use a one-dimensional vector, and multichannel samples use `(frames channels)`. `px.sndarray:array` returns a copy. `px.sndarray:samples` returns a live `px.buffer` view whose writes change the sound data. Close the view when finished; disposing its sound invalidates it.
+
+`px.mixer:play` returns a channel object when playback starts. Channels can be selected with `:channel`, repeated with `:loops` (`-1` means repeat indefinitely), limited with `:maxtime`, or started with `:fade-ms`. `stop`, `pause`, `unpause`, and `fadeout` accept a channel, a sound, or NIL for all channels. `set-volume` and `get-volume` use the range 0 to 1. `queue` schedules the next sound on a channel. Call `px.mixer:update` once per game-loop iteration (the normal event pump also calls it) so queued sounds advance on the Lisp thread.
+
+The `px.mixer.music` package handles streamed music separately from short sound chunks. Load a pathname, then use `play`, `pause`, `unpause`, `rewind`, `stop`, `set-pos`, or `queue`. Music is a singleton native stream; `unload` releases the current stream. `get-pos` reports elapsed playback milliseconds, and returns -1 when stopped.
+
+## Playback completion events
+
+`px.mixer:set-endevent` configures a channel's completion event, and
+`get-endevent` reads it. `px.mixer.music:set-endevent` / `get-endevent` configure
+the singleton music stream. Use a custom event integer or a keyword, and pass
+0 (or omit the type) to disable notifications. Channel events contain `:code`
+with the channel ID; music uses `:code 0`.
+
+```lisp
+(let* ((finished (px.event:custom-type))
+       (channel (px.mixer:make-channel 0)))
+  (px.mixer:set-endevent channel finished)
+  (px.mixer:play sound :channel channel)
+  ;; In the application's ordinary event loop:
+  (dolist (event (px.event:get :types finished))
+    (format t "Channel ~D finished~%" (px.event:attribute event :code))))
+```
+
+Completion is observed and events are posted by the mixer update/event pump
+on the Lisp thread. Stop, replacement, and queued playback each retain their
+own completion record. Pending records keep the configured event type, even
+if notification is subsequently disabled. Native audio threads never call
+application Lisp. Keep pumping so queues advance and events are delivered.
+Channel settings reset when the mixer is reopened; music's module-wide event
+type persists across shutdown. Shutdown discards undelivered records.
+
+`px.examples:audio-events-demo` plays two queued generated chimes and consumes
+their completion events in a bounded loop; the CLI name is `sound-events`.
+
+## Direct FreeType
+
+Load `pixelisp/freetype` for `px.freetype`. It renders glyph coverage directly and returns a surface with baseline-relative bounds from `render`; `render-raw` returns a packed alpha mask and its `(width height)`. Fonts expose `kerning`, `antialiased`, sized ascender/descender metrics, glyph metrics, and kerning queries. Each font owns a FreeType face and follows the same explicit disposal rules as SDL_ttf fonts.
+
+All sample and image operations in this guide work with SDL's dummy video/audio drivers, so applications can exercise decoding and data manipulation in headless environments. Real playback and window presentation require the corresponding system devices.

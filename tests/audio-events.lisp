@@ -1,0 +1,167 @@
+(in-package #:pixelisp.tests)
+(in-suite pixelisp)
+
+(defun %collect-audio-events (type timeout-ms &optional (expected 1))
+  "Pump briefly while waiting for asynchronous mixer completion notifications."
+  (let ((deadline (+ (get-internal-real-time)
+                     (* timeout-ms (/ internal-time-units-per-second 1000))))
+        (collected nil))
+    (loop for events = (px.event:get) do
+          (setf collected (nconc collected (remove-if-not (lambda (event) (eql (px.event:type event) type)) events)))
+          when (>= (length collected) expected) return collected
+          when (>= (get-internal-real-time) deadline) return collected
+          do (sleep 0.005))))
+
+(test channel-endevent-natural-queue-and-stop
+  (px.mixer:init :frequency 22050 :size -16 :channels 1 :buffer 256)
+  (let* ((sound (px.mixer:make-sound nil :buffer (make-array 4410 :element-type '(unsigned-byte 8) :initial-element 0)))
+         (channel (px.mixer:make-channel 0))
+         (type (px.event:custom-type)))
+    (unwind-protect
+         (progn
+           (px.event:clear)
+           (is (= 0 (px.mixer:get-endevent channel)))
+           (is (= type (px.mixer:set-endevent channel type)))
+           (is (= type (px.mixer:get-endevent channel)))
+           (px.mixer:play sound :channel channel)
+           (px.mixer:queue channel sound)
+           (let ((events (%collect-audio-events type 1000 2)))
+             ;; Both the first completion and the queued sound's completion fire.
+             (is (= 2 (length events)))
+             (is (every (lambda (event)
+                          (and (= 0 (px.event:attribute event :code -1)))) events)))
+           (px.event:clear)
+           (px.mixer:play sound :channel channel)
+           (px.mixer:stop channel)
+           ;; A stop posts on the next event pump, just like audio-thread endings.
+           (let ((events (%collect-audio-events type 250)))
+             (is (= 1 (length events)))
+             (is (= 0 (px.event:attribute (first events) :code -1))))
+           (px.mixer:set-endevent channel)
+           (is (= 0 (px.mixer:get-endevent channel)))
+           (px.mixer:play sound :channel channel)
+           (px.mixer:stop channel)
+           (px.mixer:update)
+           (is (null (px.event:get :types type)))
+           ;; Completion captures the configured type when stop happens, and
+           ;; each stop remains a distinct record until the next pump.
+           (px.mixer:set-endevent channel type)
+           (px.mixer:play sound :channel channel) (px.mixer:stop channel)
+           (px.mixer:set-endevent channel 0)
+           (px.mixer:play sound :channel channel) (px.mixer:stop channel)
+           (let ((events (%collect-audio-events type 250 1)))
+             (is (= 1 (length events))))
+           (px.mixer:set-endevent channel type)
+           (px.mixer:play sound :channel channel) (px.mixer:stop channel)
+           (px.mixer:play sound :channel channel) (px.mixer:stop channel)
+           (let ((events (%collect-audio-events type 250 2)))
+             (is (= 2 (length events))))
+           ;; A sound that ended between pumps is harvested by STOP exactly once.
+           (px.mixer:play sound :channel channel)
+           (sleep 0.15)
+           (px.mixer:stop channel)
+           (let ((events (%collect-audio-events type 250)))
+             (is (= 1 (length events))))
+           (px.mixer:update)
+           (is (null (px.event:get :types type)))
+           ;; A rejected replacement must leave the current playback untouched
+           ;; and must not capture a completion event for it.
+           (let ((closed (px.mixer:make-sound nil :buffer (make-array 2 :element-type '(unsigned-byte 8) :initial-element 0))))
+             (px:dispose closed)
+             (px.mixer:play sound :channel channel)
+             (signals px:disposed-resource (px.mixer:play closed :channel channel))
+             (px.mixer:stop channel)
+             (is (= 1 (length (%collect-audio-events type 250)))))
+           ;; Changing configuration after a natural ending must preserve the
+           ;; type that was active when the pump first observes completion.
+           (px.mixer:set-endevent channel type)
+           (px.mixer:play sound :channel channel)
+           (sleep 0.15)
+           (px.mixer:set-endevent channel 0)
+           (let ((events (%collect-audio-events type 250)))
+             (is (= 1 (length events)))))
+      (px.mixer:stop) (px:dispose sound) (px.mixer:quit))))
+
+(test channel-endevent-reset-on-mixer-reinit
+  (px.mixer:init :frequency 22050 :size -16 :channels 1)
+  (let* ((channel (px.mixer:make-channel 0)) (type (px.event:custom-type)))
+    (px.mixer:set-endevent channel type)
+    (px.mixer:quit)
+    (is (= 0 (px.mixer:get-endevent channel)))
+    (px.mixer:init :frequency 22050 :size -16 :channels 1)
+    (is (= 0 (px.mixer:get-endevent (px.mixer:make-channel 0))))
+    (px.mixer:quit)))
+
+(test channel-endevent-channel-shrink-cleans-stale-state
+  (px.mixer:init :frequency 22050 :size -16 :channels 1)
+  (let* ((sound (px.mixer:make-sound nil :buffer (make-array 4410 :element-type '(unsigned-byte 8) :initial-element 0)))
+         (type (px.event:custom-type)) (channel nil))
+    (unwind-protect
+         (progn
+           (px.mixer:set-num-channels 2)
+           (setf channel (px.mixer:make-channel 1))
+           (px.mixer:set-endevent channel type)
+           (px.mixer:play sound :channel channel)
+           (px.mixer:set-num-channels 1)
+           (is (= 0 (px.mixer:get-endevent channel)))
+           ;; The captured end event still posts after SDL has removed channel 1.
+           (let ((events (%collect-audio-events type 250)))
+             (is (= 1 (length events)))
+             (is (= 1 (px.event:attribute (first events) :code -1))))
+           (is (null (px.mixer:update))))
+      (px.mixer:stop) (px:dispose sound) (px.mixer:quit))))
+
+(test music-endevent-natural-stop-and-lifecycle
+  (let ((path (merge-pathnames (format nil "pixelisp-music-event-~A.wav" (gensym)) (uiop:temporary-directory)))
+        (type (px.event:custom-type)))
+    (is (= 0 (px.mixer.music:get-endevent)))
+    (px.mixer:init :frequency 22050 :size -16 :channels 1 :buffer 256)
+    (unwind-protect
+         (progn
+           (%write-test-wave path (make-array 4410 :element-type '(unsigned-byte 8) :initial-element 0) 22050 1)
+           (is (= type (px.mixer.music:set-endevent type)))
+           (is (= type (px.mixer.music:get-endevent)))
+           (px.event:clear)
+           (px.mixer.music:load path)
+           (px.mixer.music:play)
+           (let ((events (%collect-audio-events type 1000)))
+             (is (= 1 (length events)))
+             (is (= 0 (px.event:attribute (first events) :code -1))))
+           (px.event:clear)
+           ;; If natural completion happens between pumps, a later STOP still
+           ;; harvests that ending before clearing the stream state.
+           (px.mixer.music:play)
+           (sleep 0.15)
+           (px.mixer.music:stop)
+           (let ((events (%collect-audio-events type 250)))
+             (is (= 1 (length events))))
+           (px.event:clear)
+           (px.mixer.music:play)
+           (sleep 0.15)
+           (px.mixer.music:set-endevent)
+           (let ((events (%collect-audio-events type 250)))
+             (is (= 1 (length events))))
+           (px.mixer.music:set-endevent type)
+           (px.event:clear)
+           (px.mixer.music:play :loops -1)
+           (px.mixer.music:stop)
+           (let ((events (%collect-audio-events type 250)))
+             (is (= 1 (length events)))
+             (is (= 0 (px.event:attribute (first events) :code -1))))
+           (px.mixer.music:play :loops -1)
+           (px.mixer.music:stop)
+           (px.mixer.music:play :loops -1)
+           (px.mixer.music:stop)
+           (px.mixer.music:set-endevent 0)
+           (let ((events (%collect-audio-events type 250 2)))
+             (is (= 2 (length events))))
+           (px.mixer.music:set-endevent type)
+           (px.mixer.music:unload)
+           (px.mixer:quit)
+           ;; pygame retains the module-wide music event setting across quit.
+           (is (= type (px.mixer.music:get-endevent)))
+           (px.mixer:init :frequency 22050 :size -16 :channels 1)
+           (is (= type (px.mixer.music:get-endevent))))
+      (px.mixer.music:set-endevent)
+      (px.mixer:quit)
+      (when (probe-file path) (delete-file path)))))

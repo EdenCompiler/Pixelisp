@@ -1,0 +1,11 @@
+;;;; Run with SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy sbcl --script scripts/test.lisp
+(require :asdf)
+(unless (find-package :ql)
+  (let ((setup (or (probe-file (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname)))
+                   (probe-file (merge-pathnames ".quicklisp/setup.lisp" (user-homedir-pathname))))))
+    (unless setup (error "Install Quicklisp, then load pixelisp/tests with QL:QUICKLOAD."))
+    (load setup)))
+(let ((root (uiop:pathname-parent-directory-pathname (uiop:pathname-directory-pathname *load-truename*))))
+  (asdf:load-asd (merge-pathnames "pixelisp.asd" root)))
+(ql:quickload "pixelisp/tests" :silent t)
+(asdf:test-system "pixelisp")
