@@ -705,6 +705,62 @@
                 collect (mapcar #'round (first (px.freetype:get-metrics font "A" :size size))))
           (mapcar #'round (px.freetype:size font)))))
 
+(defun fixture-encoded-image-output ()
+  (px.surface:with-surface (surface '(2 2) :alpha t)
+    (loop for color in '((220 10 30 0) (40 200 60 64) (70 80 190 128) (100 110 120 255))
+          for index from 0
+          do (px.surface:set-at surface (list (mod index 2) (floor index 2)) color))
+    (append
+     (loop for kind in '(:png :bmp) collect
+       (px:with-resource (decoded (px.image:load-bytes (px.image:save-bytes surface :namehint kind)
+                                                      :namehint kind))
+         (fixture-pixel-colors decoded)))
+     (px.surface:with-surface (opaque '(2 1))
+       (px.surface:set-at opaque '(0 0) '(10 20 30))
+       (px.surface:set-at opaque '(1 0) '(40 50 60))
+       (px:with-resource (decoded (px.image:load-bytes (px.image:save-bytes opaque) :namehint :tga))
+         (list (fixture-pixel-colors decoded)))))))
+
+(defun fixture-music-memory-playback ()
+  (let* ((samples (make-array 128 :element-type '(unsigned-byte 8)
+                                  :initial-element 128))
+         ;; Mono 8-bit PCM WAV, long enough for the repeating playback checks.
+         (header '(82 73 70 70 164 0 0 0 87 65 86 69 102 109 116 32
+                   16 0 0 0 1 0 1 0 34 86 0 0 34 86 0 0 1 0 8 0
+                   100 97 116 97 128 0 0 0))
+         (bytes (concatenate '(vector (unsigned-byte 8)) header samples)))
+    (px.mixer:quit)
+    (px.mixer:init :frequency 22050 :size -16 :channels 1)
+    (unwind-protect
+         (let ((states nil))
+           (flet ((record-state () (push (if (px.mixer.music:get-busy) 1 0) states)))
+             (px.mixer.music:load-bytes bytes :namehint :wav)
+             (record-state)
+             (px.mixer.music:play :loops -1) (record-state)
+             (px.mixer.music:pause) (record-state)
+             (px.mixer.music:unpause) (record-state)
+             (px.mixer.music:queue bytes :namehint :wav :loops 1)
+             (px.mixer.music:stop) (record-state)
+             (px.mixer.music:unload) (record-state))
+           (nreverse states))
+      (px.mixer:quit))))
+
+(defun fixture-freetype-retained-text ()
+  (px:with-resource (font (px.freetype:make-font nil 24))
+    (let ((results (list (if (some #'plusp (px.freetype:render-raw font nil)) 0 1)
+                         (if (px.freetype:use-bitmap-strikes font) 1 0))))
+      (flet ((same-mask-p (first first-size second second-size)
+               (and (equal first-size second-size) (equalp first second))))
+        (multiple-value-bind (expected dimensions) (px.freetype:render-raw font "Replay" :size 28 :rotation 15)
+          (multiple-value-bind (actual actual-size) (px.freetype:render-raw font nil :size 28 :rotation 15)
+            (setf results (append results (list (if (same-mask-p expected dimensions actual actual-size) 1 0))))))
+        (setf (px.freetype:use-bitmap-strikes font) nil
+              results (append results (list (if (px.freetype:use-bitmap-strikes font) 1 0))))
+        (px.freetype:render-raw font "Next")
+        (multiple-value-bind (actual actual-size) (px.freetype:render-raw font nil)
+          (multiple-value-bind (expected dimensions) (px.freetype:render-raw font "Next")
+            (append results (list (if (same-mask-p expected dimensions actual actual-size) 1 0)))))))))
+
 (defun fixture-data ()
   (px.surface:with-surface (source '(2 2) :alpha t)
     (loop for pixel in '((10 2 3 127) (20 5 6 128) (30 8 9 255) (40 11 12 0))
@@ -776,7 +832,9 @@
              (fixture-renderer-blitting) (fixture-freetype-layout-controls)
              (fixture-freetype-baseline-ink-bounds)
              (fixture-premultiplied-image-bytes) (fixture-encoded-sound-memory)
-             (fixture-freetype-independent-size-axes))))))))
+             (fixture-freetype-independent-size-axes)
+             (fixture-encoded-image-output) (fixture-music-memory-playback)
+             (fixture-freetype-retained-text))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

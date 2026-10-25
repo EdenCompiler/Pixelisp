@@ -1,7 +1,7 @@
 ;;;; Native image, SDL_ttf and SDL_mixer capabilities.
 (defpackage #:pixelisp.image
   (:use #:cl) (:nicknames #:px.image) (:shadow #:load)
-  (:export #:load #:load-bytes #:save #:from-string #:to-string #:from-bytes #:to-bytes
+  (:export #:load #:load-bytes #:save #:save-bytes #:from-string #:to-string #:from-bytes #:to-bytes
            #:from-buffer #:get-extended #:get-sdl-image-version))
 (defpackage #:pixelisp.font
   (:use #:cl) (:nicknames #:px.font) (:shadow #:get #:get-error #:close)
@@ -33,7 +33,7 @@
            #:load-sound-bytes))
 (defpackage #:pixelisp.mixer.music
   (:use #:cl) (:nicknames #:px.mixer.music) (:shadow #:load)
-  (:export #:load #:unload #:play #:stop #:pause #:unpause #:rewind #:fadeout
+  (:export #:load #:load-bytes #:unload #:play #:stop #:pause #:unpause #:rewind #:fadeout
            #:set-endevent #:get-endevent
            #:get-busy #:set-volume #:get-volume #:get-pos #:set-pos #:queue #:update))
 (in-package #:pixelisp.image)
@@ -68,7 +68,7 @@ NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in
       (error 'type-error :datum namehint :expected-type '(or string symbol)))
     (let* ((text (string-upcase (string namehint)))
            (extension (pathname-type text))
-           (format (or extension text)))
+           (format (or extension (string-left-trim "." text))))
       ;; Let the installed SDL_image decide which codecs it supports; avoid a
       ;; fixed list that would hide newer codecs. Reject malformed hints here.
       (unless (and (plusp (length format))
@@ -130,7 +130,7 @@ NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in
 (cffi:defcfun ("SDL_RWFromFile" %rw-file) :pointer (file :string) (mode :string))
 (cffi:defcfun ("SDL_CreateRGBSurfaceWithFormatFrom" %surface-from) :pointer
   (pixels :pointer) (width :int) (height :int) (depth :int) (pitch :int) (format :uint32))
-(defun save (surface filename &key (quality 90))
+(defun %save-file (surface filename quality)
   "Write PNG, JPEG, or BMP according to the filename extension."
   (let* ((path (namestring (pathname filename)))
          (kind (string-downcase (or (pathname-type filename) "bmp")))
@@ -770,6 +770,9 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
 
 (in-package #:pixelisp.mixer.music)
 (cffi:defcfun ("Mix_LoadMUS" %load) :pointer (filename :string))
+(cffi:defcfun ("Mix_LoadMUS_RW" %load-rw) :pointer (source :pointer) (freesrc :int))
+(cffi:defcfun ("Mix_LoadMUSType_RW" %load-rw-type) :pointer
+  (source :pointer) (type :int) (freesrc :int))
 (cffi:defcfun ("Mix_FreeMusic" %free) :void (music :pointer))
 (cffi:defcfun ("Mix_PlayMusic" %play) :int (music :pointer) (loops :int))
 (cffi:defcfun ("Mix_FadeInMusicPos" %fade-in) :int (music :pointer) (loops :int) (ms :int) (position :double))
@@ -782,7 +785,11 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
 (cffi:defcfun ("Mix_PausedMusic" %paused) :int)
 (cffi:defcfun ("Mix_VolumeMusic" %volume) :int (volume :int))
 (cffi:defcfun ("Mix_SetMusicPosition" %position) :int (position :double))
+(cffi:defcfun ("SDL_RWFromConstMem" %rw-from-const-mem) :pointer (memory :pointer) (size :int))
+(cffi:defcfun ("SDL_RWclose" %rw-close) :int (source :pointer))
+(defstruct (%stream (:constructor %make-stream (native rw memory loops))) native rw memory loops)
 (defvar *music* nil) (defvar *queued* nil) (defvar *started* nil) (defvar *paused-at* nil) (defvar *pause-time* 0)
+(defvar *natural-end-pending* nil)
 ;; Music endevent is module-wide and pygame keeps it across mixer shutdown.
 (defvar *endevent* 0) (defvar *pending-endevents* nil)
 (defun %record-music-end ()
@@ -800,34 +807,131 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
   "Capture a natural stream ending before another operation changes its state."
   (when (and *started* (pixelisp.mixer:get-init) (zerop (%playing)))
     (%record-music-end)
-    (setf *started* nil *paused-at* nil *pause-time* 0))
+    (setf *started* nil *paused-at* nil *pause-time* 0 *natural-end-pending* t))
   nil)
-(defun load (filename)
-  (pixelisp.mixer::%need-init) (unload)
-  (let ((native (%load (namestring (pathname filename)))))
-    (when (cffi:null-pointer-p native) (error 'pixelisp:error :operation 'load :message (pixelisp.image::%sdl-error)))
-    (setf *music* native)) filename)
+(defun %namehint-type (hint)
+  (when hint
+    (unless (or (stringp hint) (symbolp hint))
+      (error 'type-error :datum hint :expected-type '(or string symbol)))
+    (let* ((text (string-downcase (string hint)))
+           (extension (pathname-type text))
+           (format (or extension text)))
+      (unless (plusp (length format)) (return-from %namehint-type nil))
+      (or (cdr (assoc format '(("wav" . 2) ("mod" . 3) ("mid" . 4) ("midi" . 4)
+                               ("ogg" . 5) ("mp3" . 6) ("flac" . 8) ("opus" . 10))
+                         :test #'string=))
+          (error 'pixelisp:error :operation 'load
+                 :message (format nil "Unsupported music name hint: ~A" text))))))
+(defun %read-source (stream)
+  (unless (and (input-stream-p stream)
+               (subtypep (stream-element-type stream) '(unsigned-byte 8)))
+    (error 'simple-type-error :datum stream :expected-type 'stream
+           :format-control "Expected a binary input stream containing octets"))
+  (let ((bytes (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
+    (loop for byte = (read-byte stream nil nil) while byte do (vector-push-extend byte bytes))
+    bytes))
+(defun %encoded-stream (bytes hint &optional (loops 0))
+  ;; SDL_RWFromConstMem borrows its buffer; keep both buffer and RWops until music is freed.
+  (unless (and (vectorp bytes) (subtypep (array-element-type bytes) '(unsigned-byte 8)))
+    (error 'type-error :datum bytes :expected-type '(vector (unsigned-byte 8))))
+  (let ((size (length bytes)) (type (%namehint-type hint)))
+    (when (zerop size) (error 'pixelisp:error :operation 'load :message "Music data is empty"))
+    (when (> size #x7fffffff) (error 'pixelisp:error :operation 'load :message "Music data exceeds SDL's supported size"))
+    (let ((memory (cffi:foreign-alloc :uint8 :count size)) (rw nil) (native nil) (complete nil))
+      (unwind-protect
+           (let ((stream
+                   (progn
+                     (dotimes (i size) (setf (cffi:mem-aref memory :uint8 i) (aref bytes i)))
+                     (setf rw (%rw-from-const-mem memory size))
+                     (when (cffi:null-pointer-p rw)
+                       (setf rw nil)
+                       (error 'pixelisp:error :operation 'load :message (or (pixelisp.image::%sdl-error) "Unable to create music byte stream")))
+                     (setf native (if type (%load-rw-type rw type 0) (%load-rw rw 0)))
+                     (when (cffi:null-pointer-p native)
+                       (setf native nil)
+                       (error 'pixelisp:error :operation 'load :message (or (pixelisp.image::%sdl-error) "Unsupported or malformed music data")))
+                     (%make-stream native rw memory loops))))
+             (setf complete t)
+             stream)
+        (unless complete
+          (when native (%free native))
+          (when rw (%rw-close rw))
+          (cffi:foreign-free memory))))))
+(defun %candidate (source namehint &optional (loops 0))
+  (cond
+    ((or (pathnamep source) (stringp source))
+     (let ((native (%load (if (pathnamep source) (namestring source) source))))
+       (when (cffi:null-pointer-p native)
+         (error 'pixelisp:error :operation 'load :message (pixelisp.image::%sdl-error)))
+       (%make-stream native nil nil loops)))
+    ((and (vectorp source) (subtypep (array-element-type source) '(unsigned-byte 8)))
+     (%encoded-stream source namehint loops))
+    (t (error 'type-error :datum source :expected-type '(or pathname string (vector (unsigned-byte 8)))))))
+(defun %prepare-source (source namehint)
+  "Validate a source and materialize stream contents before initializing or changing playback."
+  (%namehint-type namehint)
+  (let ((prepared (typecase source
+                    (pathname source)
+                    (string source)
+                    (stream (%read-source source))
+                    (vector (unless (subtypep (array-element-type source) '(unsigned-byte 8))
+                              (error 'type-error :datum source :expected-type '(vector (unsigned-byte 8))))
+                            source)
+                    (t (error 'type-error :datum source
+                              :expected-type '(or pathname string stream (vector (unsigned-byte 8))))))))
+    (when (and (vectorp prepared) (not (stringp prepared)))
+      (when (zerop (length prepared)) (error 'pixelisp:error :operation 'load :message "Music data is empty"))
+      (when (> (length prepared) #x7fffffff)
+        (error 'pixelisp:error :operation 'load :message "Music data exceeds SDL's supported size")))
+    prepared))
+(defun %release-stream (stream)
+  (when stream
+    (when (%stream-native stream) (%free (%stream-native stream)))
+    (when (%stream-rw stream) (%rw-close (%stream-rw stream)))
+    (when (%stream-memory stream) (cffi:foreign-free (%stream-memory stream)))
+    (setf (%stream-native stream) nil (%stream-rw stream) nil (%stream-memory stream) nil))
+  nil)
+(defun load (source &key namehint)
+  ;; Validate and fully prepare before touching the active stream.
+  (let* ((prepared (%prepare-source source namehint))
+         (candidate (progn (pixelisp.mixer::%need-init) (%candidate prepared namehint))))
+    (when *music*
+      (%harvest-music-finish)
+      (when (pixelisp.mixer:get-init) (when (plusp (%playing)) (%record-music-end)) (%halt)))
+    (%release-stream *music*) (%release-stream *queued*)
+    (setf *music* candidate *queued* nil *started* nil *paused-at* nil *pause-time* 0
+          *natural-end-pending* nil)
+    source))
+(defun load-bytes (bytes &key namehint)
+  "Load music from a specialized unsigned-byte 8 vector."
+  (unless (and (vectorp bytes) (subtypep (array-element-type bytes) '(unsigned-byte 8)))
+    (error 'type-error :datum bytes :expected-type '(vector (unsigned-byte 8))))
+  (load bytes :namehint namehint))
 (defun unload ()
   (%harvest-music-finish)
   (when (and *music* (pixelisp.mixer:get-init))
     (when (plusp (%playing)) (%record-music-end))
     (%halt))
-  (when *music* (%free *music*) (setf *music* nil))
-  (setf *queued* nil *started* nil *paused-at* nil *pause-time* 0) nil)
+  (%release-stream *music*) (%release-stream *queued*)
+  (setf *music* nil *queued* nil *started* nil *paused-at* nil *pause-time* 0
+        *natural-end-pending* nil) nil)
 (defun play (&key (loops 0) (start 0) (fade-ms 0))
   (unless *music* (error 'pixelisp:error :operation 'play :message "Load music before playback"))
   (%harvest-music-finish)
   (when (and (pixelisp.mixer:get-init) (plusp (%playing))) (%record-music-end))
   (let ((rc (if (or (plusp fade-ms) (plusp start))
-                (%fade-in *music* loops fade-ms (coerce start 'double-float)) (%play *music* loops))))
+                (%fade-in (%stream-native *music*) loops fade-ms (coerce start 'double-float))
+                (%play (%stream-native *music*) loops))))
     (when (minusp rc) (error 'pixelisp:error :operation 'play :message (pixelisp.image::%sdl-error))))
-  (setf *started* (get-internal-real-time) *paused-at* nil *pause-time* 0) nil)
+  (setf *started* (get-internal-real-time) *paused-at* nil *pause-time* 0
+        *natural-end-pending* nil) nil)
 (defun stop ()
   (%harvest-music-finish)
   (when (pixelisp.mixer:get-init)
     (when (plusp (%playing)) (%record-music-end))
     (%halt))
-  (setf *started* nil *paused-at* nil *queued* nil) nil)
+  (%release-stream *queued*)
+  (setf *started* nil *paused-at* nil *queued* nil *natural-end-pending* nil) nil)
 (defun pause ()
   (when (pixelisp.mixer:get-init)
     (when (and *started* (null *paused-at*)) (setf *paused-at* (get-internal-real-time)))
@@ -836,7 +940,10 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
   (when (pixelisp.mixer:get-init)
     (when *paused-at* (incf *pause-time* (- (get-internal-real-time) *paused-at*)) (setf *paused-at* nil))
     (%resume)))
-(defun rewind () (when (pixelisp.mixer:get-init) (%rewind) (setf *started* (get-internal-real-time) *pause-time* 0)))
+(defun rewind ()
+  (when (pixelisp.mixer:get-init)
+    (%rewind)
+    (setf *started* (get-internal-real-time) *pause-time* 0 *natural-end-pending* nil)))
 (defun fadeout (milliseconds) (when (pixelisp.mixer:get-init) (%fadeout milliseconds)))
 (defun set-volume (volume)
   "Set streaming music volume in the range 0 to 1."
@@ -850,7 +957,15 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
   (pixelisp.mixer::%require-init 'set-pos)
   (when (minusp (%position (coerce seconds 'double-float)))
     (error 'pixelisp:unsupported-feature :operation 'set-pos :message "Music decoder does not support seeking")) seconds)
-(defun queue (filename &key (loops 0)) (setf *queued* (list filename loops)) filename)
+(defun queue (source &key namehint (loops 0))
+  ;; Build the replacement completely before releasing the previous queued music.
+  (unless (and (integerp loops) (>= loops -1))
+    (error 'type-error :datum loops :expected-type '(integer -1 *)))
+  (let* ((prepared (%prepare-source source namehint))
+         (candidate (progn (pixelisp.mixer::%need-init) (%candidate prepared namehint loops))))
+    (%release-stream *queued*)
+    (setf *queued* candidate))
+  source)
 (defun update ()
   ;; Deliver explicit stops and natural endings from the event-loop thread.
   (dolist (type *pending-endevents*)
@@ -859,8 +974,20 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
   (%harvest-music-finish)
   (dolist (type *pending-endevents*) (px.event:post (px.event:make-event type :code 0)))
   (setf *pending-endevents* nil)
-  (when (and (pixelisp.mixer:get-init) *queued* (zerop (%playing)))
-    (destructuring-bind (filename loops) *queued* (setf *queued* nil) (load filename) (play :loops loops))) nil)
+  (when (and (pixelisp.mixer:get-init) *queued* *natural-end-pending*
+             (zerop (%paused)))
+    (let ((next *queued*))
+      (setf *queued* nil)
+      (%release-stream *music*)
+      (setf *music* next)
+      (setf *natural-end-pending* nil)
+      (play :loops (%stream-loops next))))
+  ;; A completed stream only authorizes a handoff during this event-loop pass.
+  ;; Preserve the signal while paused so an existing queue can resume later.
+  (when (and (pixelisp.mixer:get-init) *natural-end-pending*
+             (zerop (%paused)) (null *queued*))
+    (setf *natural-end-pending* nil))
+  nil)
 
 ;;; Work requiring Lisp execution stays on the application's event-loop thread.
 (pushnew #'pixelisp.mixer:update pixelisp.internal:*pump-hooks*)

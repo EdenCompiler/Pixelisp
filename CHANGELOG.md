@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Save encoded PNG/JPEG/BMP/TGA images to octet vectors and caller-owned binary
+  streams. Native codecs use a growable C buffer without Lisp callbacks or
+  temporary files; TGA uses a readable uncompressed Lisp writer. Unknown file
+  extensions now select TGA, matching pygame's default.
+- Load and queue streamed music from encoded memory and binary streams, with
+  native backing storage retained through playback and released on replacement
+  or unload. Queues wait for natural completion and are discarded on stop.
+- Add FreeType previous-text reuse with NIL and embedded-bitmap strike control,
+  preserving owned text copies and documenting the absence of a layout cache.
 - Add independent FreeType horizontal/vertical pixel sizes with copied property
   values, per-call overrides, validated writes and bitmap-strike checks.
 - Decode sound assets from encoded octet vectors and caller-owned binary

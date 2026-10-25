@@ -46,7 +46,73 @@ CASE_NAMES = [
     "custom SDL blend modes", "FreeType face information", "FreeType style flags",
     "SDL2 renderer blitting", "FreeType layout controls", "FreeType baseline ink bounds",
     "premultiplied image bytes", "encoded sound memory", "FreeType independent size axes",
+    "encoded image output", "music memory playback", "FreeType retained text and bitmap settings",
 ]
+
+
+def encoded_image_output():
+    surface = pygame.Surface((2, 2), pygame.SRCALPHA, 32)
+    for index, pixel in enumerate([(220, 10, 30, 0), (40, 200, 60, 64),
+                                   (70, 80, 190, 128), (100, 110, 120, 255)]):
+        surface.set_at((index % 2, index // 2), pixel)
+    result = []
+    for kind in ["png", "bmp"]:
+        output = BytesIO()
+        pygame.image.save(surface, output, kind)
+        output.seek(0)
+        decoded = pygame.image.load(output, kind)
+        result.append([list(decoded.get_at((x, y))) for y in range(2) for x in range(2)])
+    # Compare decoded pixels, since the TGA writers choose different compression.
+    opaque = pygame.Surface((2, 1), 0, 32)
+    opaque.set_at((0, 0), (10, 20, 30))
+    opaque.set_at((1, 0), (40, 50, 60))
+    output = BytesIO()
+    pygame.image.save(opaque, output, "tga")
+    output.seek(0)
+    decoded = pygame.image.load(output, "tga")
+    result.append([list(decoded.get_at((x, 0))) for x in range(2)])
+    return result
+
+
+def music_memory_playback():
+    output = BytesIO()
+    with wave.open(output, "wb") as asset:
+        asset.setparams((1, 2, 22050, 0, "NONE", "not compressed"))
+        asset.writeframes(bytes([0x34, 0x12, 0xDC, 0xFE]) * 128)
+    pygame.mixer.quit()
+    pygame.mixer.init(22050, -16, 1)
+    try:
+        pygame.mixer.music.load(BytesIO(output.getvalue()), "wav")
+        states = [int(pygame.mixer.music.get_busy())]
+        pygame.mixer.music.play(-1)
+        states.append(int(pygame.mixer.music.get_busy()))
+        pygame.mixer.music.pause()
+        states.append(int(pygame.mixer.music.get_busy()))
+        pygame.mixer.music.unpause()
+        states.append(int(pygame.mixer.music.get_busy()))
+        pygame.mixer.music.queue(BytesIO(output.getvalue()), "wav", loops=1)
+        pygame.mixer.music.stop()
+        states.append(int(pygame.mixer.music.get_busy()))
+        pygame.mixer.music.unload()
+        states.append(int(pygame.mixer.music.get_busy()))
+        return states
+    finally:
+        pygame.mixer.quit()
+
+
+def freetype_retained_text():
+    font = pygame.freetype.Font(str(ROOT / "assets/fonts/DejaVuSans.ttf"), 24)
+    results = [int(not any(font.render_raw(None)[0])), int(font.use_bitmap_strikes)]
+    expected = font.render_raw("Replay", size=28, rotation=15)
+    # Compare immediate reuse. In the local pygame 2.6.1 build, inserting
+    # get_metrics() here corrupts the rotated-layout cache and can crash Python.
+    # Pixelisp tests independently verify that metric queries preserve its text.
+    results.append(int(expected == font.render_raw(None, size=28, rotation=15)))
+    font.use_bitmap_strikes = False
+    results.append(int(font.use_bitmap_strikes))
+    font.render_raw("Next")
+    results.append(int(font.render_raw(None) == font.render_raw("Next")))
+    return results
 
 
 def premultiplied_image_bytes():
@@ -925,6 +991,7 @@ def reference():
          pygame.freetype.STYLE_WIDE, pygame.freetype.STYLE_DEFAULT],
         renderer_blitting(), freetype_layout_controls(), freetype_baseline_ink_bounds(),
         premultiplied_image_bytes(), encoded_sound_memory(), freetype_independent_size_axes(),
+        encoded_image_output(), music_memory_playback(), freetype_retained_text(),
     ]
 
 

@@ -43,8 +43,9 @@ Available systems:
 | `pixelisp/examples/tests` | Bounded game runs and synthetic-input tests |
 | `pixelisp/tests` | FiveAM tests, including optional hardware checks |
 
-Camera and post-mix capture build a small C adapter lazily in ASDF's output
-cache. The regular toolkit does not require that build. Missing libraries and
+Camera capture, post-mix capture, and PNG/JPEG/BMP encoding into memory build
+a small C adapter lazily in ASDF's output cache. Other toolkit features do not
+require that build. Missing libraries and
 initialization failures signal Lisp conditions with operation details.
 
 ## First game loop

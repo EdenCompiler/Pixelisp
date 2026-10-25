@@ -18,7 +18,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `display` | `px.display` | Default window/framebuffer, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries, iconify request, screensaver control |
 | `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
-| `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams, PNG/JPEG/BMP saving, raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
+| `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
 | `transform` | `px.transform` | Flip, scaling, smooth scaling, rotation/rotozoom, scale2x, chop, color operations, thresholding, Laplacian edges |
 | `event` | `px.event` | Native event copying, include/exclude retrieval with optional pumping, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
 | `key` | `px.key` | Scancode state, keyword names, modifiers, focus, text-input controls and configurable pump-delivered native key repeat |
@@ -32,9 +32,9 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
 | `sprite` | `px.sprite` | CLOS sprites, single/ordered/layered/dirty groups, membership/update, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
 | `font`, `sysfont` | `px.font`, `px.sysfont` | UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
-| `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
+| `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
-| `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Sound decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music, playback controls and pump-delivered completion events |
+| `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
 | `sndarray` | `px.sndarray` | Copied sample arrays and live views, sound creation from arrays |
 | `surfarray` | `px.surfarray` | Packed/RGB/channel copies and views, array-to-surface operations |
@@ -127,6 +127,10 @@ The exported Lisp symbols and module API guides describe the actual interface.
   SDL_mixer wrapper can close a supplied sound stream after decoding; Pixelisp
   leaves that decision to the caller. Memory sound inputs use the explicit
   `:file` keyword to distinguish encoded assets from raw PCM `:buffer` data.
+  Memory music inputs retain copied encoded bytes until replaced or unloaded;
+  large Lisp streams are materialized before native playback. TGA output uses
+  uncompressed raw BGR/BGRA pixels; pygame can use RLE and encode transparency
+  differently. PNG/JPEG/BMP memory encoding uses the optional native bridge.
 - Python-only implementation modules are mapped to these Lisp capabilities;
   their internal import names are not duplicated as standalone packages.
 
@@ -137,7 +141,8 @@ pixel fixtures, direct FreeType/TTF rendering, image round-trips, samples/music,
 FreeType style/rotation overrides, vertical placement, bitmap-strike metadata
 and unsupported-style checks, independent size axes and scoped metric/render
 overrides, premultiplied image export, encoded sound decoding and stream
-ownership, no-pump event selection and exclusion ordering,
+ownership, retained music buffers and queue cleanup, image encoding roundtrips
+and stream positions, FreeType retained text/bitmap flags, no-pump event selection and exclusion ordering,
 window/renderer ownership, renderer target restoration and readback, partial
 and format-converting texture updates, texture origins/blend modes, atlas crops
 and modifier isolation, custom blend encoding and accelerated blending pixels,
@@ -149,6 +154,9 @@ Xvfb exercises X11 presentation, clipboard text, independent window grabs,
 window flags and fullscreen transitions.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
+The retained-text fixture compares immediate reuse. The local pygame build's
+rotated-layout cache is unstable when a metrics query interrupts reuse;
+Pixelisp tests that sequence independently without depending on the cache.
 
 Physical camera capture, MIDI device I/O, audio recording, and rumble require
 the opt-in checks and suitable hardware. Their adapters are implemented, but

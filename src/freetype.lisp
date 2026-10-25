@@ -10,7 +10,7 @@
            #:get-metrics #:get-kerning #:get-rect #:render #:render-to #:render-raw
            #:size #:kerning #:antialiased #:origin #:style #:underline #:oblique #:strong #:wide
            #:strength #:underline-adjustment #:get-sized-height #:get-sized-ascender
-           #:get-sized-descender #:name #:render-raw-to #:rotation #:vertical))
+           #:get-sized-descender #:name #:render-raw-to #:rotation #:vertical #:use-bitmap-strikes))
 (in-package #:pixelisp.freetype)
 (defconstant style-normal 0)
 (defconstant style-underline 4)
@@ -26,6 +26,10 @@
    (origin :initarg :origin :initform nil :accessor origin)
    (rotation :initarg :rotation :initform 0 :reader %rotation)
    (vertical :initarg :vertical :initform nil :reader %vertical)
+   ;; Pygame retains the last successfully laid-out text for NIL calls.
+   ;; Keep an owned copy because Common Lisp strings are mutable sequences.
+   (previous-text :initform nil :accessor %previous-text)
+   (use-bitmap-strikes :initarg :use-bitmap-strikes :initform t :accessor %use-bitmap-strikes)
    (style :initarg :style :initform style-normal :reader %style)
    (strength :initarg :strength :initform (/ 1.0 36) :reader %strength)
    (underline-adjustment :initarg :underline-adjustment :initform 1.0 :reader %underline-adjustment)
@@ -184,6 +188,15 @@
   (check-type font font)
   (pixelisp.internal:ensure-live font)
   (%vertical font))
+(defun use-bitmap-strikes (font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%use-bitmap-strikes font))
+(defun (setf use-bitmap-strikes) (value font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (check-type value boolean)
+  (setf (%use-bitmap-strikes font) value))
 (defun (setf vertical) (value font)
   "Enable FreeType vertical metrics and top-to-bottom glyph layout."
   (check-type font font)
@@ -297,7 +310,9 @@ Only the reusable glyph slot is modified. Its coverage must be copied before
 the next character is loaded; no face-wide transform survives this call."
   (let* ((synthetic (logtest active-style (logior style-oblique style-strong style-wide)))
          (rotated (plusp degrees))
-         (flags (append (when (or synthetic rotated) '(:no-bitmap))
+         (flags (append (when (or synthetic rotated
+                                  (and (not (use-bitmap-strikes font)) (%scalable-font-p font)))
+                        '(:no-bitmap))
                         (when vertical-layout '(:vertical-layout)))))
     (freetype2:load-char face character flags)
     (let* ((slot (freetype2-types:ft-face-glyph face))
@@ -351,6 +366,11 @@ the next character is loaded; no face-wide transform survives this call."
   "Return glyph placements and their baseline-relative bounds."
   (check-type font font)
   (pixelisp.internal:ensure-live font)
+  ;; Pygame's newly-created Font starts with empty text, so its first NIL call
+  ;; is a valid empty layout. Later NIL calls resolve to the last successful
+  ;; layout string.
+  (setf text (or text (%previous-text font) ""))
+  (check-type text string)
   (unless (or (null requested-style) (eql requested-style style-default) (%valid-style-p requested-style))
     (error "STYLE must be a combination of supported style flags."))
   (let* ((degrees (%rotation-value requested-rotation))
@@ -400,8 +420,10 @@ the next character is loaded; no face-wide transform survives this call."
             (end-y (round (* pen axis-y))))
         (setf left (min left end-x) right (max right end-x)
               top (min top end-y) bottom (max bottom end-y)))
-      (values (nreverse glyphs)
-              (pixelisp:make-rect left top (max 1 (- right left)) (max 1 (- bottom top)))))))
+      (let ((bounds (pixelisp:make-rect left top (max 1 (- right left)) (max 1 (- bottom top)))))
+        ;; Store only after all validation and glyph layout succeeded.
+        (setf (%previous-text font) (copy-seq text))
+        (values (nreverse glyphs) bounds)))))
 
 (defun get-rect (font text &key size (style style-default) (rotation (rotation font)))
   (nth-value 1 (%layout font text size style rotation)))

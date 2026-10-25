@@ -450,3 +450,179 @@ size_t px_postmix_read(unsigned char *output, size_t capacity) {
     pthread_mutex_unlock(&capture_mutex);
     return count;
 }
+
+/* In-memory SDL_RWops used by image encoders. The RWops only borrows this
+   stack-scoped state; its byte buffer is ordinary native malloc storage. */
+struct px_image_writer {
+    unsigned char *bytes;
+    size_t length;
+    size_t capacity;
+    size_t position;
+    int failed;
+    int allocation_failed;
+};
+
+static int image_writer_reserve(struct px_image_writer *writer, size_t needed) {
+    if (needed <= writer->capacity) return 0;
+    size_t capacity = writer->capacity ? writer->capacity : 4096;
+    while (capacity < needed) {
+        if (capacity > SIZE_MAX / 2) {
+            capacity = needed;
+            break;
+        }
+        capacity *= 2;
+    }
+    unsigned char *bytes = realloc(writer->bytes, capacity);
+    if (!bytes) {
+        writer->failed = 1;
+        writer->allocation_failed = 1;
+        return -1;
+    }
+    writer->bytes = bytes;
+    writer->capacity = capacity;
+    return 0;
+}
+
+static Sint64 SDLCALL image_rw_size(SDL_RWops *rw) {
+    struct px_image_writer *writer = rw->hidden.unknown.data1;
+    if (writer->length > (size_t)INT64_MAX) {
+        writer->failed = 1;
+        return -1;
+    }
+    return (Sint64)writer->length;
+}
+
+static Sint64 SDLCALL image_rw_seek(SDL_RWops *rw, Sint64 offset, int whence) {
+    struct px_image_writer *writer = rw->hidden.unknown.data1;
+    Sint64 base;
+    switch (whence) {
+    case RW_SEEK_SET: base = 0; break;
+    case RW_SEEK_CUR:
+        if (writer->position > (size_t)INT64_MAX) return -1;
+        base = (Sint64)writer->position;
+        break;
+    case RW_SEEK_END:
+        if (writer->length > (size_t)INT64_MAX) return -1;
+        base = (Sint64)writer->length;
+        break;
+    default:
+        writer->failed = 1;
+        return -1;
+    }
+    if ((offset > 0 && base > INT64_MAX - offset) ||
+        (offset < 0 && base < INT64_MIN - offset)) {
+        writer->failed = 1;
+        return -1;
+    }
+    const Sint64 target = base + offset;
+    if (target < 0) {
+        writer->failed = 1;
+        return -1;
+    }
+    writer->position = (size_t)target;
+    return target;
+}
+
+static size_t SDLCALL image_rw_read(SDL_RWops *rw, void *pointer, size_t size,
+                                    size_t maximum) {
+    (void)rw;
+    (void)pointer;
+    (void)size;
+    (void)maximum;
+    return 0;
+}
+
+static size_t SDLCALL image_rw_write(SDL_RWops *rw, const void *pointer,
+                                     size_t size, size_t count) {
+    struct px_image_writer *writer = rw->hidden.unknown.data1;
+    if (size && count > SIZE_MAX / size) {
+        writer->failed = 1;
+        return 0;
+    }
+    const size_t amount = size * count;
+    if (amount > (size_t)INT64_MAX || writer->position > (size_t)INT64_MAX - amount) {
+        writer->failed = 1;
+        return 0;
+    }
+    const size_t end = writer->position + amount;
+    if (image_writer_reserve(writer, end) < 0) return 0;
+    if (writer->position > writer->length)
+        memset(writer->bytes + writer->length, 0, writer->position - writer->length);
+    if (amount) memcpy(writer->bytes + writer->position, pointer, amount);
+    writer->position = end;
+    if (end > writer->length) writer->length = end;
+    return count;
+}
+
+static int SDLCALL image_rw_close(SDL_RWops *rw) {
+    SDL_FreeRW(rw);
+    return 0;
+}
+
+void px_image_bytes_free(void *bytes) { free(bytes); }
+
+/* format: 0=BMP, 1=PNG, 2=JPEG. SDL_image entry points are supplied by the
+   caller so this adapter does not add an SDL_image link dependency. */
+int px_image_encode(SDL_Surface *surface, int format, void *codec, int quality,
+                    unsigned char **output, size_t *length) {
+    if (output) *output = NULL;
+    if (length) *length = 0;
+    if (!surface || !output || !length || format < 0 || format > 2) {
+        set_error("invalid image encoder arguments");
+        return -1;
+    }
+    if (format != 0 && !codec) {
+        set_error("requested image encoder is unavailable");
+        return -1;
+    }
+
+    struct px_image_writer writer = {0};
+    SDL_RWops *rw = SDL_AllocRW();
+    if (!rw) {
+        const char *detail = SDL_GetError();
+        snprintf(px_error, sizeof px_error, "allocate image memory stream failed%s%s",
+                 detail && detail[0] ? ": " : "",
+                 detail && detail[0] ? detail : "");
+        return -1;
+    }
+    memset(rw, 0, sizeof *rw);
+    rw->size = image_rw_size;
+    rw->seek = image_rw_seek;
+    rw->read = image_rw_read;
+    rw->write = image_rw_write;
+    rw->close = image_rw_close;
+    rw->hidden.unknown.data1 = &writer;
+
+    int result;
+    if (format == 0) {
+        result = SDL_SaveBMP_RW(surface, rw, 0);
+    } else if (format == 1) {
+        typedef int (SDLCALL *png_encoder)(SDL_Surface *, SDL_RWops *, int);
+        result = ((png_encoder)codec)(surface, rw, 0);
+    } else {
+        typedef int (SDLCALL *jpeg_encoder)(SDL_Surface *, SDL_RWops *, int, int);
+        result = ((jpeg_encoder)codec)(surface, rw, 0, quality);
+    }
+
+    image_rw_close(rw);
+    if (result < 0 || writer.failed) {
+        free(writer.bytes);
+        const char *detail = SDL_GetError();
+        if (writer.allocation_failed) {
+            set_error("allocate image memory stream buffer failed");
+        } else if (writer.failed) {
+            snprintf(px_error, sizeof px_error,
+                     "image encoder memory stream failed%s%s",
+                     detail && detail[0] ? ": " : "",
+                     detail && detail[0] ? detail : "");
+        } else {
+            snprintf(px_error, sizeof px_error, "image encoding failed%s%s",
+                     detail && detail[0] ? ": " : "",
+                     detail && detail[0] ? detail : "");
+        }
+        return -1;
+    }
+    *output = writer.bytes;
+    *length = writer.length;
+    return 0;
+}

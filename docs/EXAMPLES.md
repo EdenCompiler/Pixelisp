@@ -42,6 +42,7 @@ sbcl --script scripts/example.lisp prism-breaker --frames 120 --fps 60
 sbcl --script scripts/example.lisp orbit-patrol --seed 7 --no-audio
 sbcl --script scripts/example.lisp crater-command --frames 120 --seed 7
 sbcl --script scripts/example.lisp echo-grove --screenshot /tmp/echo.png
+sbcl --script scripts/example.lisp echo-grove --screenshot /tmp/echo.tga
 sbcl --script scripts/example.lisp orbit-patrol --backend renderer
 ```
 
@@ -83,6 +84,11 @@ From the REPL:
 (px.examples:run-example "prism-breaker" :frames 120 :seed 7 :fixed-dt 0.0167
                          :audio nil :backend :renderer)
 ```
+
+The REPL runner also accepts a binary output stream for `:screenshot`. It
+writes a complete TGA image at the stream's current position and leaves it
+open. This allows storing the actual game frame directly in an archive or
+other caller-managed output without an intermediate screenshot file.
 
 The bounded game suite is available through `make test-examples` or
 `(asdf:test-system "pixelisp/examples")`. It checks native runner integration,

@@ -16,7 +16,31 @@ API's surface format, so dispose the returned surface when finished.
 alias for `from-string` and copies raw packed pixel bytes using the selected
 dimensions and channel order; it does not decode a PNG/JPEG file.
 
-`(px.image:save surface pathname &key (quality 90))` chooses PNG, JPEG, or BMP from the pathname extension. JPEG quality is an integer from 0 to 100. PNG and BMP are lossless; JPEG discards color detail.
+`(px.image:save surface destination &key namehint (quality 90))` chooses PNG,
+JPEG, BMP, or TGA from a pathname extension. Unknown extensions now select TGA,
+matching pygame; earlier Pixelisp versions selected BMP. JPEG quality is an
+integer from 0 to 100. PNG, BMP, and TGA are lossless; JPEG discards color detail.
+
+DESTINATION can also be a binary output stream. Supply `:namehint :png`,
+`:jpeg`, `:bmp`, or `:tga` to select its format, or omit it for TGA. The stream
+remains open, and output starts at its current position. Use `finish-output`
+before reading buffered output. Image encoding finishes before the first
+stream write, so invalid codec arguments leave the stream untouched; ordinary
+stream I/O errors can still leave partial output.
+
+`(px.image:save-bytes surface &key namehint (quality 90))` returns a complete
+encoded image as a specialized octet vector. `to-bytes` returns raw pixel
+channels instead. PNG/JPEG/BMP memory output uses the lazy native adapter's
+growable SDL stream, with no Lisp callbacks or intermediate files. TGA uses a
+portable Lisp writer with uncompressed BGR/BGRA pixels and a top-left origin;
+pygame can choose RLE compression and different transparency encoding.
+
+```lisp
+;; Encode an asset for storage in an archive; decode it again without a file.
+(let ((encoded (px.image:save-bytes image :namehint "sprite.png")))
+  (px:with-resource (decoded (px.image:load-bytes encoded))
+    (px.surface:blit screen decoded '(40 60))))
+```
 
 `from-string` and `from-bytes` copy packed pixel data into a new surface. `to-string` and `to-bytes` copy pixels out as a specialized `(unsigned-byte 8)` vector. Both functions take dimensions as `(width height)` and a channel order such as `:rgb`, `:rgba`, `:rgbx`, `:argb`, `:bgra`, or `:bgr`. A true `flipped` argument reverses row order. Alpha is 255 for formats without an alpha channel.
 
@@ -95,7 +119,28 @@ once per cached note. This exercises memory loading during ordinary gameplay.
 
 `px.mixer:play` returns a channel object when playback starts. Channels can be selected with `:channel`, repeated with `:loops` (`-1` means repeat indefinitely), limited with `:maxtime`, or started with `:fade-ms`. `stop`, `pause`, `unpause`, and `fadeout` accept a channel, a sound, or NIL for all channels. `set-volume` and `get-volume` use the range 0 to 1. `queue` schedules the next sound on a channel. Call `px.mixer:update` once per game-loop iteration (the normal event pump also calls it) so queued sounds advance on the Lisp thread.
 
-The `px.mixer.music` package handles streamed music separately from short sound chunks. Load a pathname, then use `play`, `pause`, `unpause`, `rewind`, `stop`, `set-pos`, or `queue`. Music is a singleton native stream; `unload` releases the current stream. `get-pos` reports elapsed playback milliseconds, and returns -1 when stopped.
+The `px.mixer.music` package handles streamed music separately from short sound
+chunks. `load` accepts a pathname, string path, encoded octet vector, or binary
+input stream; `load-bytes` explicitly requires an octet vector. Binary streams
+are consumed from their current position to EOF and remain open. Optional
+`:namehint` selects a codec: WAV, MOD, MIDI, OGG, MP3, FLAC, or OPUS; an empty
+hint autodetects the format, and filename hints such as `"theme.ogg"` work too.
+Available decoders depend on the SDL_mixer build.
+
+Memory and stream inputs are copied into native-owned encoded storage that
+stays alive until the music is replaced or unloaded. Decoding during playback
+uses native SDL streams; no audio callback calls Lisp. The caller may mutate
+its original bytes or close its input stream immediately after loading.
+Large streams are materialized as encoded bytes, so this avoids decoding the
+whole track to PCM but does retain the encoded asset in memory.
+
+Use `play`, `pause`, `unpause`, `rewind`, `stop`, `set-pos`, or `queue` after
+loading. Music is a singleton native stream; `unload` releases it and any queued
+track. `get-pos` reports elapsed playback milliseconds, and returns -1 when
+stopped. `queue` accepts the same sources and name hints, plus `:loops`; it
+prepares one pending track and replaces any prior queued track. Invalid sources
+leave current/queued tracks unchanged. Natural handoff occurs when events are
+pumped or `px.mixer:update` runs. Stopping music discards its queued track.
 
 ## Playback completion events
 
@@ -221,6 +266,29 @@ integer element type that can represent every value from 0 through 255. A
 `(unsigned-byte 8)` plane, such as a surface alpha-channel view. Pixels whose
 original glyph coverage is zero are left untouched, including in inverted
 mode; for nonzero coverage, `:invert t` writes `255 - coverage`.
+
+Pass NIL as text to `get-rect`, `render`, `render-to`, `render-raw`, or
+`render-raw-to` to reuse the last successfully laid-out string on that font.
+The font copies the string, so later caller edits do not change the retained
+text. A fresh font reuses an empty string, and `get-metrics` does not replace
+it. Size, style, rotation, and other properties still apply on each call;
+this is text reuse, without pygame's layout cache. Failed layout validation
+preserves the previous string; a later painting failure can occur after the
+new layout has already been retained. Pixelisp retains its minimum 1×1 bounds
+for blank rendered text.
+
+The boolean `use-bitmap-strikes` property defaults to T. Set it to NIL to
+request outlines from scalable fonts that also contain embedded bitmaps.
+It is ignored for bitmap-only fonts, which still require a supported strike.
+Synthetic styling and rotation already request outlines regardless of this
+property.
+
+```lisp
+(px:with-resource (font (px.freetype:make-font nil 24))
+  (px.freetype:get-rect font "Ready?")
+  ;; Reuse the measured string with a different placement/color.
+  (px.freetype:render-to font screen '(80 100) nil '(255 220 140)))
+```
 
 The reference is [pygame 2.6.1 FreeType](https://github.com/pygame/pygame/blob/2.6.1/docs/reST/ref/freetype.rst),
 with native metric units described by [FreeType's face fields](https://freetype.org/freetype2/docs/reference/ft2-face_creation.html#ft_facerec).

@@ -120,6 +120,24 @@
       (when (probe-file path) (delete-file path))))
   (is (%clean-run-p)))
 
+(test screenshot-stream-remains-owned-by-the-game-caller
+  (let ((path (merge-pathnames (format nil "pixelisp-game-stream-~A.tga" (gensym))
+                               (uiop:temporary-directory))))
+    (unwind-protect
+         (with-open-file (stream path :direction :io :if-exists :supersede
+                                     :element-type '(unsigned-byte 8))
+           ;; With no filename extension, SAVE's stream output defaults to TGA.
+           (px.examples:play :frames 0 :audio nil :screenshot stream)
+           (is (open-stream-p stream))
+           (finish-output stream)
+           (file-position stream 0)
+           (px:with-init (:video nil)
+             (px:with-resource (image (px.image:load stream :namehint :tga))
+               (is (equal '(900 620) (px.surface:size image)))
+               (is (> (px:color-r (px.surface:get-at image '(80 154))) 200)))))
+      (when (probe-file path) (delete-file path))))
+  (is (%clean-run-p)))
+
 (test renderer-backend-runs-the-same-games-and-input
   ;; A presentation change must not change seeded gameplay or its event loop.
   (dolist (entry (px.examples:list-examples))
