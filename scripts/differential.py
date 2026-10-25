@@ -28,6 +28,7 @@ CASE_NAMES = [
     "rectangle scaling and mutation", "object collisions", "vector update and rotation",
     "captured audio completions",
     "Color arithmetic", "I1I2I3 conversion", "event filtering",
+    "event selection without pumping",
     "weighted pixel matching", "pixel transpose", "surface batching and anchors",
     "keyboard repeat settings",
     "scalar lerp and vector rounding",
@@ -42,6 +43,7 @@ CASE_NAMES = [
     "SDL2 texture rotation origin", "SDL2 nested image atlas rectangles",
     "SDL2 image modulation pixels", "RLE colorkey alpha and post-blit lock state",
     "custom SDL blend modes", "FreeType face information", "FreeType style flags",
+    "SDL2 renderer blitting", "FreeType layout controls", "FreeType baseline ink bounds",
 ]
 
 
@@ -288,6 +290,45 @@ def event_filtering():
                 len(pygame.event.get([first, second]))]
     finally:
         pygame.event.set_allowed([first, second])
+        pygame.display.quit()
+
+
+def event_selection():
+    """Compare custom-event include/exclude selection without native pumping."""
+    pygame.display.init()
+    first, excluded, third = [pygame.event.custom_type() for _ in range(3)]
+    types = (first, excluded, third)
+
+    def post(records):
+        for kind, code in records:
+            pygame.event.post(pygame.event.Event(kind, code=code))
+
+    def codes(events):
+        return [event.code for event in events if event.type in types]
+
+    try:
+        pygame.event.clear(pump=False)
+        post([(first, 11), (excluded, 21), (first, 12), (third, 31), (excluded, 22)])
+        without_excluded = codes(pygame.event.get(exclude=excluded, pump=False))
+        excluded_remaining = codes(pygame.event.get([excluded], pump=False))
+
+        pygame.event.clear(pump=False)
+        post([(first, 11), (first, 12), (third, 31), (excluded, 21), (excluded, 22)])
+        included = codes(pygame.event.get([first, third], pump=False))
+        include_remaining = codes(pygame.event.get(pump=False))
+
+        pygame.event.clear(pump=False)
+        post([(first, 41), (excluded, 42), (first, 43)])
+        conflict = 0
+        try:
+            pygame.event.get(first, pump=False, exclude=excluded)
+        except pygame.error:
+            conflict = 1
+        conflict_preserved = codes(pygame.event.get(pump=False))
+        return [without_excluded, excluded_remaining, included, include_remaining,
+                conflict, conflict_preserved]
+    finally:
+        pygame.event.clear(pump=False)
         pygame.display.quit()
 
 
@@ -685,6 +726,80 @@ def sdl2_image_modulation_pixels():
         window.destroy()
 
 
+def renderer_blitting():
+    from pygame._sdl2 import Window, Renderer, Texture
+    window = Window("renderer blit", size=(8, 4), hidden=True)
+    renderer = Renderer(window, accelerated=False)
+    source = pygame.Surface((4, 1), pygame.SRCALPHA, 32)
+    for x, red in enumerate((10, 20, 30, 40)):
+        source.set_at((x, 0), (red, 0, 0, 255))
+    texture = Texture.from_surface(renderer, source)
+    pixels = pygame.Surface((8, 4), pygame.SRCALPHA, 32)
+    try:
+        renderer.draw_color = (0, 0, 0, 255)
+        renderer.clear()
+        cropped = list(renderer.blit(texture, pygame.Rect(2, 1, 4, 1),
+                                     pygame.Rect(1, 0, 2, 1), 42))
+        renderer.to_surface(pixels)
+        crop_row = [pixels.get_at((x, 1)).r for x in range(8)]
+        renderer.clear()
+        offscreen = list(renderer.blit(texture, pygame.Rect(-1, 0, 4, 1)))
+        renderer.to_surface(pixels)
+        offscreen_row = [pixels.get_at((x, 0)).r for x in range(8)]
+        empty = list(renderer.blit(texture, pygame.Rect(2, 1, 0, 1)))
+        renderer.set_viewport(pygame.Rect(1, 1, 4, 2))
+        viewport = list(renderer.blit(texture, None))
+        return [cropped, crop_row, offscreen, offscreen_row, empty, viewport]
+    finally:
+        del texture
+        del renderer
+        window.destroy()
+
+
+def freetype_layout_controls():
+    import pygame.freetype as ft
+    ft.init()
+    font = ft.Font(str(ROOT / "assets/fonts/DejaVuSans.ttf"), 24)
+    normalized = []
+    for angle in (-45, 725, 360):
+        font.rotation = angle
+        normalized.append(font.rotation)
+    font.get_rect("L", rotation=90)
+    unchanged = font.rotation
+    font.vertical = True
+
+    def rejected(style, rotation):
+        try:
+            font.render_raw("L", style=style, rotation=rotation)
+            return 0
+        except ValueError:
+            return 1
+
+    return [normalized, unchanged, int(font.vertical),
+            rejected(ft.STYLE_WIDE, 90), rejected(ft.STYLE_UNDERLINE, 90),
+            rejected(ft.STYLE_UNDERLINE, 0), font.style]
+
+
+def freetype_baseline_ink_bounds():
+    """Measure ink independently of each library's advance-padding policy."""
+    import pygame.freetype as ft
+    ft.init()
+    font = ft.Font(str(ROOT / "assets/fonts/DejaVuSans.ttf"), 24)
+    result = []
+    for vertical in (False, True):
+        font.vertical = vertical
+        row = []
+        for angle in (0, 90, 180, 270):
+            mask, (width, height) = font.render_raw("L", rotation=angle)
+            rect = font.get_rect("L", rotation=angle)
+            points = [(x + rect.x, y - rect.y) for y in range(height)
+                      for x in range(width) if mask[x + y * width]]
+            xs, ys = zip(*points)
+            row.append([min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1])
+        result.append(row)
+    return result
+
+
 def rle_colorkey_alpha_lock_state():
     source = pygame.Surface((3, 1), pygame.SRCALPHA, 32)
     for x, color in enumerate([(200, 10, 20, 255), (255, 0, 255, 255),
@@ -748,6 +863,7 @@ def reference():
         color_arithmetic(),
         i1i2i3(),
         event_filtering(),
+        event_selection(),
         pixel_distance(),
         pixel_transpose(),
         surface_batch(),
@@ -767,6 +883,7 @@ def reference():
         [pygame.freetype.STYLE_NORMAL, pygame.freetype.STYLE_STRONG,
          pygame.freetype.STYLE_OBLIQUE, pygame.freetype.STYLE_UNDERLINE,
          pygame.freetype.STYLE_WIDE, pygame.freetype.STYLE_DEFAULT],
+        renderer_blitting(), freetype_layout_controls(), freetype_baseline_ink_bounds(),
     ]
 
 

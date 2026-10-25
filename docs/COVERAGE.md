@@ -20,7 +20,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
 | `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams, PNG/JPEG/BMP saving, raw pixel byte conversions and shared 32-bit foreign imports |
 | `transform` | `px.transform` | Flip, scaling, smooth scaling, rotation/rotozoom, scale2x, chop, color operations, thresholding, Laplacian edges |
-| `event` | `px.event` | Native event copying, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
+| `event` | `px.event` | Native event copying, include/exclude retrieval with optional pumping, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
 | `key` | `px.key` | Scancode state, keyword names, modifiers, focus, text-input controls and configurable pump-delivered native key repeat |
 | `mouse` | `px.mouse` | Position, relative movement, buttons, visibility, focus, relative mode |
 | `cursors`, `Cursor` | `px.cursors` | System/color/bitmap cursors and ASCII bitmap compilation |
@@ -32,7 +32,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
 | `sprite` | `px.sprite` | CLOS sprites, single/ordered/layered/dirty groups, membership/update, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
 | `font`, `sysfont` | `px.font`, `px.sysfont` | UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
-| `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, kerning, face/strike metrics, baseline placement, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
+| `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Sounds, channels, volume/panning, fades/queues, streamed music, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
@@ -45,7 +45,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `scrap` | `px.scrap` | UTF-8 clipboard and primary selection; advertises text-only capabilities |
 | `threads` | `px.threads` | Workers, multiple values, failure propagation, ordered bounded parallel map |
 | `fastevent` | `px.fastevent` | Operational facade over the modern event queue |
-| `_sdl2`, `_sdl2.sdl2`, `_sdl2.video` | `px.sdl2`, `px.sdl2.video` | Independent windows with identity, fullscreen/windowed requests, resize/border/opacity/grab/icon controls; renderer driver/capability queries, custom blend composition, state, targets/readback, texture updates, atlas Image regions with tint/alpha/pivots and ownership |
+| `_sdl2`, `_sdl2.sdl2`, `_sdl2.video` | `px.sdl2`, `px.sdl2.video` | Independent windows with identity, fullscreen/windowed requests, resize/border/opacity/grab/icon controls; renderer blitting, driver/capability queries, custom blend composition, state, targets/readback, texture updates, atlas Image regions with tint/alpha/pivots and ownership |
 | `_sdl2.audio` | `px.sdl2.audio` | Raw queued PCM playback/capture devices, enumeration and ownership |
 | `_sdl2.mixer` | `px.sdl2.mixer` | Post-mix observation via a bounded native PCM ring, drained on the Lisp thread |
 | `examples` | `px.examples`, `pixelisp/examples` | Four playable games—Prism Breaker, Orbit Patrol, Crater Command, and Echo Grove—with a shared 900×620 runner, deterministic bounded runs, synthetic input, gameplay snapshots, and generated audio |
@@ -71,11 +71,13 @@ The exported Lisp symbols and module API guides describe the actual interface.
   can differ from pygame's exact pixels. The implementation favors readable
   CPU algorithms; there is no performance or bit-exact parity claim.
 - Direct FreeType strong/oblique/wide styling requires outline fonts; bitmap
-  fonts can still be rendered and underlined. Bitmap wide styling, vertical
-  layout, rotated text, two-axis font sizes, and pygame's layout cache are not
-  implemented. Face metrics use native font units or explicit pixel queries;
-  raw glyph metrics remain unstyled. Style rasterization and advance rounding
-  can differ from pygame.
+  fonts can still be rendered and underlined. Bitmap wide styling, two-axis font
+  sizes, and pygame's layout cache are not implemented. Wide and underline
+  styles cannot be rotated; vertical text cannot be underlined. Vertical
+  placement uses FreeType metrics, with synthesized values when the font lacks
+  them. Bounds include advance padding. Face metrics use native font units or
+  explicit pixel queries; raw glyph metrics remain unstyled. Style
+  rasterization and advance rounding can differ from pygame.
 - Dirty-group redraws restore saved backgrounds and redraw every visible member
   in draw order to preserve overlap. They can report broader damage than
   pygame's optimized dirty rectangles; returned damage is clipped to the
@@ -107,6 +109,10 @@ The exported Lisp symbols and module API guides describe the actual interface.
   storage. Crops must be nonempty and contained in their parent region. Image
   drawing restores the texture's previous tint, alpha and blend settings;
   pygame leaves those settings on the shared texture after drawing.
+- Renderer `blit` accepts textures/images, rectangle sequences and position
+  pairs, with contained source-local areas. It returns a fresh requested Rect
+  or the viewport for NIL/empty destinations. As in pygame's renderer method,
+  special flags are ignored and the return value is not clipped damage.
 - RLE is an SDL source-blit hint, distinct from the current encoded/locked
   state. It is limited to owned root surfaces with no live subsurfaces or pixel
   views. Disable it before creating a subsurface. SDL's RLE path can change
@@ -122,12 +128,15 @@ The exported Lisp symbols and module API guides describe the actual interface.
 
 The automated suite tests real native buffers with dummy audio/video, tiny
 pixel fixtures, direct FreeType/TTF rendering, image round-trips, samples/music,
-FreeType style overrides, bitmap-strike metadata and unsupported-style checks,
+FreeType style/rotation overrides, vertical placement, bitmap-strike metadata
+and unsupported-style checks, no-pump event selection and exclusion ordering,
 window/renderer ownership, renderer target restoration and readback, partial
 and format-converting texture updates, texture origins/blend modes, atlas crops
 and modifier isolation, custom blend encoding and accelerated blending pixels,
 positioned masks, RLE pixel access and borrowing rules, virtual
 joysticks, worker behavior and lifetimes.
+Renderer blitting tests cover pixels, cropping, destination/viewport return
+values and shared texture state; the mini-game renderer runner uses this API.
 Xvfb exercises X11 presentation, clipboard text, independent window grabs,
 window flags and fullscreen transitions.
 An optional differential

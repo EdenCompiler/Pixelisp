@@ -259,6 +259,27 @@ recommends them for textures that change infrequently.
 top-left. Without an origin SDL rotates around the destination center. These
 texture calls, like the renderer controls, must run on the video thread.
 
+`(px.sdl2.video:blit renderer source &optional destination &key area special-flags)`
+provides pygame's renderer convenience operation for a texture or atlas image.
+Use a Rect or four-value list/vector to stretch the source into a destination,
+or a two-value position to draw at the full texture/image size. A position uses
+that full size even when `:area` selects a smaller crop. NIL fills the current
+viewport. `:area` is local to the source image or texture and must be contained
+within it; an empty area draws nothing. This containment rule follows
+Pixelisp's atlas API rather than SDL's clipping of out-of-range texture crops.
+
+The returned value is a fresh copy of the requested destination Rect, without
+clipping or rotation applied. NIL or a destination with a zero dimension
+returns the viewport rectangle. It is not a damage report. As in pygame 2.6.1,
+the integer `:special-flags` argument is accepted but has no effect; choose
+blending through texture or image properties. The source must belong to the
+receiver renderer. Image drawing retains its usual modifier isolation.
+
+```lisp
+(px.sdl2.video:blit renderer texture '(40 70))
+(px.sdl2.video:blit renderer icon '(40 70 64 64) :area '(0 0 16 16))
+```
+
 ## Texture atlas images
 
 `make-image` creates a lightweight `image` view over a renderer-owned texture;

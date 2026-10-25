@@ -245,6 +245,44 @@
                    (length (px.event:get :types (list first second)))))
         (px.event:set-allowed (list first second))))))
 
+(defun fixture-event-selection ()
+  (px:with-init (:video t)
+    (let ((first (px.event:custom-type))
+          (excluded (px.event:custom-type))
+          (third (px.event:custom-type)))
+      (labels ((post-records (records)
+                 (dolist (record records)
+                   (px.event:post (px.event:make-event (first record) :code (second record)))))
+               (collect-codes (events)
+                 (mapcar (lambda (event) (px.event:attribute event :code)) events)))
+        (unwind-protect
+             (progn
+               (px.event:clear nil :pump nil)
+               (post-records (list (list first 11) (list excluded 21) (list first 12)
+                                   (list third 31) (list excluded 22)))
+               (let ((without-excluded (collect-codes
+                                        (px.event:get :exclude excluded :pump nil)))
+                     (excluded-remaining (collect-codes
+                                          (px.event:get :types excluded :pump nil))))
+                 (px.event:clear nil :pump nil)
+                 (post-records (list (list first 11) (list first 12) (list third 31)
+                                     (list excluded 21) (list excluded 22)))
+                 (let ((included (collect-codes
+                                 (px.event:get :types (list first third) :pump nil)))
+                       (include-remaining (collect-codes (px.event:get :pump nil))))
+                   (px.event:clear nil :pump nil)
+                   (post-records (list (list first 41) (list excluded 42) (list first 43)))
+                   (let ((conflict
+                           (handler-case
+                               (progn (px.event:get :types first :exclude excluded :pump nil) 0)
+                             (error () 1)))
+                         (conflict-preserved
+                           (collect-codes
+                            (px.event:get :types (list first excluded third) :pump nil))))
+                     (list without-excluded excluded-remaining included include-remaining
+                           conflict conflict-preserved)))))
+          (px.event:clear nil :pump nil))))))
+
 (defun fixture-pixel-distance ()
   (px.surface:with-surface (surface '(4 1) :alpha t)
     (loop for x from 0 for color in '((100 100 100 255) (120 100 100 0)
@@ -557,6 +595,61 @@
                                            (px.surface:get-at pixels (list x 1))))
                               '(0 1 3 4)))))))))))
 
+(defun fixture-renderer-blitting ()
+  (px:with-init (:video t)
+    (px.sdl2.video:with-window (window :size '(8 4) :hidden t)
+      (px.sdl2.video:with-renderer (renderer window)
+        (px.surface:with-surface (source '(4 1) :alpha t)
+          (loop for red in '(10 20 30 40) for x from 0
+                do (px.surface:set-at source (list x 0) (list red 0 0 255)))
+          (px:with-resource (texture (px.sdl2.video:texture-from-surface renderer source))
+            (flet ((row (y)
+                     (px:with-resource (pixels (px.sdl2.video:to-surface renderer))
+                       (loop for x below 8 collect (px:color-r (px.surface:get-at pixels (list x y)))))))
+              (px.sdl2.video:clear renderer '(0 0 0 255))
+              (let* ((cropped (fixture-rect-values
+                               (px.sdl2.video:blit renderer texture '(2 1 4 1) :area '(1 0 2 1) :special-flags 42)))
+                     (crop-row (row 1)))
+                (px.sdl2.video:clear renderer)
+                (let* ((offscreen (fixture-rect-values (px.sdl2.video:blit renderer texture '(-1 0 4 1))))
+                       (offscreen-row (row 0))
+                       (empty (fixture-rect-values (px.sdl2.video:blit renderer texture '(2 1 0 1)))))
+                  (setf (px.sdl2.video:viewport renderer) '(1 1 4 2))
+                  (list cropped crop-row offscreen offscreen-row empty
+                        (fixture-rect-values (px.sdl2.video:blit renderer texture))))))))))))
+
+(defun fixture-freetype-layout-controls ()
+  (px:with-resource (font (px.freetype:make-font nil 24))
+    (let ((normalized (loop for angle in '(-45 725 360) collect
+                       (progn (setf (px.freetype:rotation font) angle) (px.freetype:rotation font)))))
+      (px.freetype:get-rect font "L" :rotation 90)
+      (let ((unchanged (px.freetype:rotation font)))
+        (setf (px.freetype:vertical font) t)
+        (flet ((rejected (style rotation)
+                 (handler-case (progn (px.freetype:render-raw font "L" :style style :rotation rotation) 0)
+                   (px:unsupported-feature () 1))))
+          (list normalized unchanged (if (px.freetype:vertical font) 1 0)
+                (rejected px.freetype:style-wide 90) (rejected px.freetype:style-underline 90)
+                (rejected px.freetype:style-underline 0) (px.freetype:style font)))))))
+
+(defun fixture-freetype-baseline-ink-bounds ()
+  (px:with-resource (font (px.freetype:make-font nil 24))
+    (loop for vertical in '(nil t) collect
+      (progn
+        (setf (px.freetype:vertical font) vertical)
+        (loop for angle in '(0 90 180 270) collect
+          (multiple-value-bind (mask dimensions) (px.freetype:render-raw font "L" :rotation angle)
+            (let* ((rect (px.freetype:get-rect font "L" :rotation angle))
+                   (width (first dimensions)) (height (second dimensions)) (xs nil) (ys nil))
+              (dotimes (y height)
+                (dotimes (x width)
+                  (when (plusp (aref mask (+ x (* y width))))
+                    (push (+ x (px.rect:x rect)) xs)
+                    (push (+ y (px.rect:y rect)) ys))))
+              (list (reduce #'min xs) (reduce #'min ys)
+                    (1+ (- (reduce #'max xs) (reduce #'min xs)))
+                    (1+ (- (reduce #'max ys) (reduce #'min ys)))))))))))
+
 (defun fixture-rle-colorkey-alpha-lock-state ()
   (px.surface:with-surface (source '(3 1) :alpha t)
     (loop for color in '((200 10 20 255) (255 0 255 255) (20 200 30 100))
@@ -614,6 +707,7 @@
              (fixture-color-arithmetic)
              (fixture-i1i2i3)
              (fixture-event-filtering)
+             (fixture-event-selection)
              (fixture-pixel-distance)
              (fixture-pixel-transpose)
              (fixture-surface-batch)
@@ -637,7 +731,9 @@
              (fixture-freetype-face-information)
              (list px.freetype:style-normal px.freetype:style-strong
                    px.freetype:style-oblique px.freetype:style-underline
-                   px.freetype:style-wide px.freetype:style-default))))))))
+                   px.freetype:style-wide px.freetype:style-default)
+             (fixture-renderer-blitting) (fixture-freetype-layout-controls)
+             (fixture-freetype-baseline-ink-bounds))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

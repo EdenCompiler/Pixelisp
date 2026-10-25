@@ -56,6 +56,8 @@ native mouse input when the window changes size. Hardware acceleration is tried
 first, with a software fallback for environments such as the dummy driver.
 The streaming texture is retained by a reusable `px.sdl2.video:image` wrapper,
 which draws the frame through the same API used for cropped texture atlases.
+The runner presents this image with `px.sdl2.video:blit`, so the convenience
+operation is exercised by the games and their screenshot tests.
 The default is `--backend surface`. Renderer screenshots read the completed
 backbuffer before presenting it, and reflect the window's actual pixel size.
 SDL clips the read to its physical viewport, leaving transparent letterbox

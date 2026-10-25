@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add FreeType outline rotation with normalized angles and per-call overrides,
+  vertical glyph placement, and early validation of unsupported style/layout
+  combinations. Keep rasterization, styling and layout in commented helpers.
+- Add event retrieval exclusions and optional pumping for get/peek/clear,
+  preserving queue order, limits and video-thread checks.
+- Add renderer `blit` for textures and atlas images with destination/viewport
+  return rectangles; use it in the mini-game renderer runner. Expand pixel,
+  lifetime and pygame differential checks for these capabilities.
 - Add direct FreeType strong, oblique, wide and underline styles, per-call
   overrides, strength/underline placement controls, face capability queries,
   bitmap-strike information and sized glyph height.

@@ -10,7 +10,7 @@
            #:get-metrics #:get-kerning #:get-rect #:render #:render-to #:render-raw
            #:size #:kerning #:antialiased #:origin #:style #:underline #:oblique #:strong #:wide
            #:strength #:underline-adjustment #:get-sized-height #:get-sized-ascender
-           #:get-sized-descender #:name #:render-raw-to))
+           #:get-sized-descender #:name #:render-raw-to #:rotation #:vertical))
 (in-package #:pixelisp.freetype)
 (defconstant style-normal 0)
 (defconstant style-underline 4)
@@ -24,6 +24,8 @@
    (kerning :initarg :kerning :initform t :accessor kerning)
    (antialiased :initarg :antialiased :initform t :accessor antialiased)
    (origin :initarg :origin :initform nil :accessor origin)
+   (rotation :initarg :rotation :initform 0 :reader %rotation)
+   (vertical :initarg :vertical :initform nil :reader %vertical)
    (style :initarg :style :initform style-normal :reader %style)
    (strength :initarg :strength :initform (/ 1.0 36) :reader %strength)
    (underline-adjustment :initarg :underline-adjustment :initform 1.0 :reader %underline-adjustment)
@@ -76,6 +78,32 @@
   (and (integerp value) (<= 0 value) (= 0 (logandc2 value 15))))
 (defun %scalable-font-p (font)
   (freetype2-types:ft-face-face-flags-test (pixelisp.internal:handle font) '(:scalable)))
+(defun %rotation-value (value)
+  (check-type value integer)
+  (mod value 360))
+(defun rotation (font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%rotation font))
+(defun (setf rotation) (value font)
+  "Set the counterclockwise baseline rotation, normalized to 0 through 359."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (let ((normalized (%rotation-value value)))
+    (when (and (plusp normalized) (not (%scalable-font-p font)))
+      (error 'pixelisp:unsupported-feature :operation 'rotation
+             :message "Rotation requires a scalable outline font."))
+    (setf (slot-value font 'rotation) normalized)))
+(defun vertical (font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%vertical font))
+(defun (setf vertical) (value font)
+  "Enable FreeType vertical metrics and top-to-bottom glyph layout."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (check-type value boolean)
+  (setf (slot-value font 'vertical) value))
 (defun style (font)
   (check-type font font) (pixelisp.internal:ensure-live font) (%style font))
 (defun (setf style) (value font)
@@ -141,79 +169,155 @@
                (height (/ (freetype2-types:ft-glyph-metrics-height metrics) 64.0)))
           (list left (+ left width) (- top height) top (freetype2:get-loaded-advance face nil) 0.0))))))
 
-(defun %layout (font text requested-size requested-style)
-  "Return glyph coverage placements and their baseline-relative bounding box."
-  (unless (or (null requested-style) (eq requested-style style-default) (%valid-style-p requested-style))
-    (error "STYLE must be a combination of supported style flags."))
-  (check-type font font)
-  (pixelisp.internal:ensure-live font)
-  (let* ((active-style (if (or (null requested-style) (eq requested-style style-default))
-                           (style font) requested-style))
-         (synthetic (logtest active-style (logior style-oblique style-strong style-wide)))
-         (face (%face font requested-size)) (pen 0.0) (previous nil) (glyphs nil)
-        (left 0) (top 0) (right 0) (bottom 0))
-    (when (and synthetic (not (%scalable-font-p font)))
-      (error 'pixelisp:unsupported-feature :operation 'render
-             :message "Synthetic styles require a scalable outline font."))
-    (loop for character across text do
-      (when (and previous (kerning font)) (incf pen (freetype2:get-kerning face previous character)))
-      ;; Outline fonts can contain bitmap strikes too. Styling must explicitly
-      ;; request an outline rather than depending on the size chosen by SDL.
-      (freetype2:load-char face character (when synthetic '(:no-bitmap)))
-      (let ((slot (freetype2-types:ft-face-glyph face)))
-        (when (and synthetic (not (eq :outline (freetype2-types:ft-glyphslot-format slot))))
-          (error 'pixelisp:unsupported-feature :operation 'render
-                 :message "Synthetic styles require a scalable outline glyph."))
-        (when synthetic
-          ;; Change only this loaded glyph slot; the next LOAD-CHAR replaces it.
-          ;; A face-wide transform would also affect later unstyled rendering.
-          (let* ((scale (if (logtest active-style style-wide) (+ 1.0 (strength font)) 1.0))
-                 (shear (if (logtest active-style style-oblique) 0.21255656 0.0))
-                 (outline (freetype2-types:ft-glyphslot-outline slot)))
-            (cffi:with-foreign-object (matrix '(:struct freetype2-types::foreign-ft-matrix))
-              (setf (cffi:foreign-slot-value matrix '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::xx)
-                    (round (* 65536 scale))
-                    (cffi:foreign-slot-value matrix '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::xy)
-                    (round (* 65536 shear))
-                    (cffi:foreign-slot-value matrix '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::yx) 0
-                    (cffi:foreign-slot-value matrix '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::yy) 65536)
-              (freetype2-ffi:ft-outline-transform (freetype2-types:fw-ptr outline) matrix))
-            (when (logtest active-style style-strong)
-              (freetype2:outline-embolden outline (round (* 64 (or requested-size (size font)) (strength font)))))))
-      (let* ((slot (freetype2:render-glyph face (if (antialiased font) :normal :mono)))
-             (bitmap (freetype2-types:ft-glyphslot-bitmap slot))
-             (x (+ (round pen) (freetype2-types:ft-glyphslot-bitmap-left slot)))
-             (y (- (freetype2-types:ft-glyphslot-bitmap-top slot))))
+(defun %rotation-matrix (degrees)
+  "Return a FreeType 16.16 matrix for a counterclockwise outline rotation."
+  (let ((radians (* pi (/ degrees 180.0))))
+    (list (round (* 65536 (cos radians)))
+          (round (* -65536 (sin radians)))
+          (round (* 65536 (sin radians)))
+          (round (* 65536 (cos radians))))))
+(defun %transform-outline (outline matrix)
+  (cffi:with-foreign-object (native '(:struct freetype2-types::foreign-ft-matrix))
+    (setf (cffi:foreign-slot-value native '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::xx) (first matrix)
+          (cffi:foreign-slot-value native '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::xy) (second matrix)
+          (cffi:foreign-slot-value native '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::yx) (third matrix)
+          (cffi:foreign-slot-value native '(:struct freetype2-types::foreign-ft-matrix) 'freetype2-types::yy) (fourth matrix))
+    ;; The dependency wraps this void function as an error result, so call its
+    ;; raw FFI entry point directly, as the existing synthetic-style path does.
+    (freetype2-ffi:ft-outline-transform (freetype2-types:fw-ptr outline) native)))
+(defun %vertical-origin-offset (slot)
+  "Return the horizontal-to-vertical origin shift in FreeType's 26.6 units."
+  (let ((metrics (freetype2-types:ft-glyphslot-metrics slot)))
+    (values (- (freetype2-types:ft-glyph-metrics-vert-bearing-x metrics)
+               (freetype2-types:ft-glyph-metrics-hori-bearing-x metrics))
+            (- (+ (freetype2-types:ft-glyph-metrics-vert-bearing-y metrics)
+                  (freetype2-types:ft-glyph-metrics-hori-bearing-y metrics))))))
+
+(defun %style-outline (font outline active-style requested-size)
+  "Change the current glyph's shape before its placement and rotation."
+  (let ((scale (if (logtest active-style style-wide) (+ 1 (strength font)) 1))
+        (shear (if (logtest active-style style-oblique) 0.21255656 0)))
+    (%transform-outline outline
+                        (list (round (* 65536 scale)) (round (* 65536 shear)) 0 65536))
+    (when (logtest active-style style-strong)
+      (freetype2:outline-embolden
+       outline (round (* 64 (or requested-size (size font)) (strength font)))))))
+
+(defun %raster-layout-glyph (font face character requested-size active-style degrees vertical-layout)
+  "Return coverage, bitmap X/Y bearings, and the unrotated pen advance.
+
+Only the reusable glyph slot is modified. Its coverage must be copied before
+the next character is loaded; no face-wide transform survives this call."
+  (let* ((synthetic (logtest active-style (logior style-oblique style-strong style-wide)))
+         (rotated (plusp degrees))
+         (flags (append (when (or synthetic rotated) '(:no-bitmap))
+                        (when vertical-layout '(:vertical-layout)))))
+    (freetype2:load-char face character flags)
+    (let* ((slot (freetype2-types:ft-face-glyph face))
+           (outline-p (eq :outline (freetype2-types:ft-glyphslot-format slot)))
+           (advance (freetype2:get-loaded-advance face vertical-layout))
+           (bitmap-offset-x 0) (bitmap-offset-y 0))
+      (when (and (or synthetic rotated) (not outline-p))
+        (error 'pixelisp:unsupported-feature :operation 'render
+               :message "Rotation and synthetic styles require outline glyphs."))
+      (let ((outline (when outline-p (freetype2-types:ft-glyphslot-outline slot))))
+        ;; Embolden before rotation so strong text rotates as a complete shape.
+        (when synthetic (%style-outline font outline active-style requested-size))
+        (when vertical-layout
+          (multiple-value-bind (dx dy) (%vertical-origin-offset slot)
+            (if outline
+                (freetype2-ffi:ft-outline-translate (freetype2-types:fw-ptr outline) dx dy)
+                ;; Bitmap fonts have no outline. Move their bitmap at placement.
+                (setf bitmap-offset-x (round dx 64) bitmap-offset-y (- (round dy 64))))))
+        (when rotated (%transform-outline outline (%rotation-matrix degrees))))
+      (let* ((rendered (freetype2:render-glyph face (if (antialiased font) :normal :mono)))
+             (bitmap (freetype2-types:ft-glyphslot-bitmap rendered))
+             (x (+ (freetype2-types:ft-glyphslot-bitmap-left rendered) bitmap-offset-x))
+             (y (+ (- (freetype2-types:ft-glyphslot-bitmap-top rendered)) bitmap-offset-y)))
         (multiple-value-bind (coverage mode) (freetype2:bitmap-to-array bitmap)
           (when (eq mode :mono)
-            (dotimes (i (array-total-size coverage)) (setf (row-major-aref coverage i) (* 255 (row-major-aref coverage i)))))
-          (push (list x y coverage) glyphs)
-          (setf left (min left x) top (min top y)
-                right (max right (+ x (array-dimension coverage 1)))
-                bottom (max bottom (+ y (array-dimension coverage 0))))))
-      (incf pen (* (freetype2:get-loaded-advance face nil)
-                   (if (logtest active-style style-wide) (+ 1.0 (strength font)) 1.0)))
-      (setf previous character)))
-    (when (and (logtest active-style style-underline) (plusp (ceiling pen)))
-      (let* ((upem (max 1 (freetype2-types:ft-face-units-per-em face)))
-             (adjustment (underline-adjustment font))
-             (underline-position (freetype2-types:ft-face-underline-position face))
-             (ascender (freetype2-types:ft-face-ascender face))
-             (underline-thickness (freetype2-types:ft-face-underline-thickness face))
-             (font-size (or requested-size (size font)))
-             (line-width (ceiling pen))
-             (line-y (round (* font-size (if (minusp adjustment)
-                                             (/ (* adjustment ascender) upem)
-                                             (/ (* -1 adjustment underline-position) upem)))))
-             (line-height (max 1 (ceiling (/ (* font-size (abs underline-thickness)) upem))))
-             (line (make-array (list line-height line-width) :initial-element 255)))
-        (push (list 0 line-y line) glyphs)
-        (setf left (min left 0) right (max right line-width)
-              top (min top line-y) bottom (max bottom (+ line-y line-height)))))
-    (values (nreverse glyphs) (pixelisp:make-rect left top (max 1 (- (max right (ceiling pen)) left))
-                                                (max 1 (- bottom top))))))
-(defun get-rect (font text &key size (style style-default))
-  (nth-value 1 (%layout font text size style)))
+            ;; The binding may use BIT storage for monochrome glyphs. Widen it
+            ;; before converting 0/1 samples into ordinary byte coverage.
+            (let ((bytes (make-array (array-dimensions coverage) :element-type '(unsigned-byte 8))))
+              (dotimes (index (array-total-size coverage))
+                (setf (row-major-aref bytes index) (* 255 (row-major-aref coverage index))))
+              (setf coverage bytes)))
+          (values coverage x y
+                  (* advance (if (and (not vertical-layout) (logtest active-style style-wide))
+                                 (+ 1 (strength font)) 1))))))))
+
+(defun %underline-coverage (font face requested-size advance)
+  "Return the ordinary horizontal underline mask and its baseline Y offset."
+  (let* ((upem (max 1 (freetype2-types:ft-face-units-per-em face)))
+         (adjustment (underline-adjustment font))
+         (font-size (or requested-size (size font)))
+         (position (if (minusp adjustment)
+                       (* adjustment (freetype2-types:ft-face-ascender face))
+                       (* -1 adjustment (freetype2-types:ft-face-underline-position face))))
+         (y (round (/ (* font-size position) upem)))
+         (height (max 1 (ceiling (* font-size (abs (freetype2-types:ft-face-underline-thickness face))) upem))))
+    (values (make-array (list height (ceiling advance)) :element-type '(unsigned-byte 8)
+                                                         :initial-element 255)
+            y)))
+
+(defun %layout (font text requested-size requested-style requested-rotation)
+  "Return glyph placements and their baseline-relative bounds."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (unless (or (null requested-style) (eql requested-style style-default) (%valid-style-p requested-style))
+    (error "STYLE must be a combination of supported style flags."))
+  (let* ((degrees (%rotation-value requested-rotation))
+         (active-style (if (or (null requested-style) (eql requested-style style-default))
+                           (style font) requested-style))
+         (vertical-layout (vertical font))
+         (synthetic (logtest active-style (logior style-oblique style-strong style-wide)))
+         (rotated (plusp degrees)))
+    ;; Validate combinations before loading glyphs, resizing a face, or touching
+    ;; a caller's target. These are also pygame's layout restrictions.
+    (when (and (or rotated synthetic) (not (%scalable-font-p font)))
+      (error 'pixelisp:unsupported-feature :operation 'render
+             :message "Rotation and synthetic styles require an outline font."))
+    (when (and rotated (logtest active-style style-wide))
+      (error 'pixelisp:unsupported-feature :operation 'rotation
+             :message "The wide style cannot be combined with rotation."))
+    (when (and (or rotated vertical-layout) (logtest active-style style-underline))
+      (error 'pixelisp:unsupported-feature :operation 'render
+             :message "Underline cannot be combined with rotation or vertical layout."))
+    (let* ((face (%face font requested-size))
+           (angle (* pi (/ degrees 180)))
+           ;; Positive Y points down on a surface. The horizontal axis rotates
+           ;; counterclockwise; the vertical axis starts pointing downward.
+           (axis-x (if vertical-layout (sin angle) (cos angle)))
+           (axis-y (if vertical-layout (cos angle) (- (sin angle))))
+           (pen 0.0) (previous nil) (glyphs nil)
+           (left 0) (top 0) (right 0) (bottom 0))
+      (labels ((record-glyph (x y coverage)
+                 (push (list x y coverage) glyphs)
+                 (setf left (min left x) top (min top y)
+                       right (max right (+ x (array-dimension coverage 1)))
+                       bottom (max bottom (+ y (array-dimension coverage 0))))))
+        (loop for character across text do
+          (when (and previous (kerning font) (not vertical-layout))
+            (incf pen (freetype2:get-kerning face previous character)))
+          (multiple-value-bind (coverage x y advance)
+              (%raster-layout-glyph font face character requested-size active-style degrees vertical-layout)
+            (record-glyph (+ (round (* pen axis-x)) x) (+ (round (* pen axis-y)) y) coverage)
+            (incf pen advance))
+          (setf previous character))
+        (when (and (logtest active-style style-underline) (plusp (ceiling pen)))
+          (multiple-value-bind (coverage y) (%underline-coverage font face requested-size pen)
+            (record-glyph 0 y coverage))))
+      ;; Include the advance as well as ink, retaining the existing horizontal
+      ;; spacing convention. This can leave padding after the last vertical glyph.
+      (let ((end-x (if (and (not rotated) (not vertical-layout)) (ceiling pen) (round (* pen axis-x))))
+            (end-y (round (* pen axis-y))))
+        (setf left (min left end-x) right (max right end-x)
+              top (min top end-y) bottom (max bottom end-y)))
+      (values (nreverse glyphs)
+              (pixelisp:make-rect left top (max 1 (- right left)) (max 1 (- bottom top)))))))
+
+(defun get-rect (font text &key size (style style-default) (rotation (rotation font)))
+  (nth-value 1 (%layout font text size style rotation)))
 (defun %blend-glyph-pixel (surface position color coverage)
   "Composite one glyph pixel using straight alpha, including transparent backgrounds."
   (multiple-value-bind (red green blue alpha) (pixelisp.internal:rgba color)
@@ -229,9 +333,9 @@
                                   (list red green blue) (list back-red back-green back-blue))))
             (px.surface:set-at surface position (append channels (list (round (* 255 output-alpha)))))))))))
 
-(defun render (font text &optional (foreground '(255 255 255 255)) background &key size (style style-default))
+(defun render (font text &optional (foreground '(255 255 255 255)) background &key size (style style-default) (rotation (rotation font)))
   "Return a rendered Surface and baseline-relative Rect as two values."
-  (multiple-value-bind (glyphs rect) (%layout font text size style)
+  (multiple-value-bind (glyphs rect) (%layout font text size style rotation)
     (let ((surface (px.surface:make-surface (list (px.rect:width rect) (px.rect:height rect)) :alpha t))
           (complete nil))
       (unwind-protect
@@ -248,11 +352,11 @@
              (values surface rect))
         ;; A malformed color or failed pixel write must not leak this new owner.
         (unless complete (pixelisp.internal:dispose surface))))))
-(defun render-to (font target destination text &optional (foreground '(255 255 255)) background &key size (style style-default))
+(defun render-to (font target destination text &optional (foreground '(255 255 255)) background &key size (style style-default) (rotation (rotation font)))
   "Render to TARGET at a top-left destination, or baseline when ORIGIN is true."
   (pixelisp.internal:ensure-live font)
   (let ((coordinates (%destination-xy destination)))
-    (multiple-value-bind (surface rect) (render font text foreground background :size size :style style)
+    (multiple-value-bind (surface rect) (render font text foreground background :size size :style style :rotation rotation)
       (let ((position (if (origin font)
                           (list (+ (first coordinates) (px.rect:x rect))
                                 (+ (second coordinates) (px.rect:y rect)))
@@ -270,9 +374,9 @@
     (unless (and coordinates (every #'integerp coordinates))
       (error "DEST must be a Rect or provide integer X and Y coordinates."))
     coordinates))
-(defun render-raw (font text &key size invert (style style-default))
+(defun render-raw (font text &key size invert (style style-default) (rotation (rotation font)))
   "Return a packed 8-bit alpha mask and its dimensions as two values."
-  (multiple-value-bind (surface rect) (render font text '(255 255 255) nil :size size :style style)
+  (multiple-value-bind (surface rect) (render font text '(255 255 255) nil :size size :style style :rotation rotation)
     (unwind-protect
          (let* ((width (px.surface:width surface)) (height (px.surface:height surface))
                 (bytes (make-array (* width height) :element-type '(unsigned-byte 8))))
@@ -301,7 +405,7 @@
        (error "TARGET must be a rank-two integer array able to hold values from 0 through 255."))
      (values (array-dimension target 0) (array-dimension target 1) :array))
     (t (error "TARGET must be a rank-two integer array or byte buffer view."))))
-(defun render-raw-to (font target text &key (dest '(0 0)) size invert (style style-default))
+(defun render-raw-to (font target text &key (dest '(0 0)) size invert (style style-default) (rotation (rotation font)))
   "Write nonzero glyph coverage into TARGET and return the font's original bounds.
 
 TARGET is indexed in Pixelisp's X,Y axis order. Arrays use AREF and buffer views
@@ -312,8 +416,8 @@ DEST and is returned in full even when TARGET clips the writes."
   (pixelisp.internal:ensure-live font)
   (let ((coordinates (%destination-xy dest)))
     (multiple-value-bind (target-width target-height target-kind) (%raw-target-info target)
-      (multiple-value-bind (bytes dimensions) (render-raw font text :size size :style style)
-        (let* ((bounds (get-rect font text :size size :style style))
+      (multiple-value-bind (bytes dimensions) (render-raw font text :size size :style style :rotation rotation)
+        (let* ((bounds (get-rect font text :size size :style style :rotation rotation))
                (glyph-width (first dimensions)) (glyph-height (second dimensions))
                (x0 (if (origin font) (+ (first coordinates) (px.rect:x bounds)) (first coordinates)))
                (y0 (if (origin font) (+ (second coordinates) (px.rect:y bounds)) (second coordinates)))

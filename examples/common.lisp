@@ -141,8 +141,7 @@ SNAPSHOT returns ordinary values that remain usable after native cleanup."
         (progn
           (px.sdl2.video:update-texture (session-texture session) screen)
           (px.sdl2.video:clear renderer '(0 0 0))
-          (px.sdl2.video:draw-image renderer (session-frame-image session)
-                                  :destination '(0 0 900 620))
+          (px.sdl2.video:blit renderer (session-frame-image session) '(0 0 900 620))
           ;; SDL does not promise the backbuffer survives PRESENT. Read it now.
           (when screenshot
             (px:with-resource (capture (px.sdl2.video:to-surface renderer))

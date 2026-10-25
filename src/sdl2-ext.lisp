@@ -50,7 +50,7 @@
   (:nicknames #:px.sdl2.video #:pixelisp.sdl2 #:px.sdl2) (:use #:cl) (:shadow #:close #:position)
   (:export #:window #:renderer #:texture #:make-window #:make-renderer #:make-texture
            #:texture-from-surface #:close #:title #:size #:position #:show #:hide
-           #:clear #:present #:draw-color #:draw-line #:draw-point #:fill-rect #:draw-texture
+           #:clear #:present #:draw-color #:draw-line #:draw-point #:fill-rect #:draw-texture #:blit
            #:texture-size #:texture-alpha #:texture-color #:with-window #:with-renderer
            #:target-supported-p #:target #:with-render-target #:viewport #:get-viewport #:set-viewport
            #:logical-size #:renderer-scale #:draw-blend-mode #:draw-rect #:to-surface

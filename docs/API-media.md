@@ -140,6 +140,34 @@ outline-only font. The first three values are integers and ppem values are
 fractional pixels. Bitmap sizes must match a supported strike when opening or
 rendering that font.
 
+`rotation` is a settable integer angle in counterclockwise degrees, normalized
+to 0 through 359: -45 becomes 315 and 720 becomes 0. All rendering functions
+and `get-rect` accept `:rotation` to override it for one call without changing
+the font. Glyph outlines rotate before rasterization, with their placement
+rotated around the text baseline. Rotation requires an outline font. As in
+pygame, wide or underlined text cannot be rotated; an unsupported combination
+signals `px:unsupported-feature` before painting a caller's target.
+
+The boolean `vertical` property selects top-to-bottom layout using FreeType's
+vertical bearings and advances. Glyphs remain upright within the column;
+rotation turns the column and its glyphs together. Fonts without native
+vertical metrics use the metrics FreeType synthesizes. This is explicit
+orientation control, not automatic script detection or paragraph shaping.
+Underlining is unavailable in vertical layout. Pixelisp's bounds include the
+baseline advance, which can add blank padding after the last vertical glyph.
+
+```lisp
+(px:with-resource (font (px.freetype:make-font nil 28))
+  (setf (px.freetype:origin font) t
+        (px.freetype:rotation font) 90)
+  (px.freetype:render-to font screen '(300 250) "UP" '(240 220 130) nil)
+  ;; Render one upright label while retaining the font's stored angle.
+  (px.freetype:render-to font screen '(40 80) "Score" '(255 255 255) nil :rotation 0)
+  (setf (px.freetype:rotation font) 0
+        (px.freetype:vertical font) t)
+  (px.freetype:render-to font screen '(500 60) "ABC" '(160 220 255) nil))
+```
+
 Fonts expose `kerning`, `antialiased`, sized ascender/descender metrics, glyph
 metrics, and kerning queries. The `origin` property defaults to NIL and can be
 set with `(setf (px.freetype:origin font) t)`. There is no `:origin` constructor
@@ -163,8 +191,8 @@ mode; for nonzero coverage, `:invert t` writes `255 - coverage`.
 
 The reference is [pygame 2.6.1 FreeType](https://github.com/pygame/pygame/blob/2.6.1/docs/reST/ref/freetype.rst),
 with native metric units described by [FreeType's face fields](https://freetype.org/freetype2/docs/reference/ft2-face_creation.html#ft_facerec).
-Vertical layout, text rotation, independent horizontal/vertical font sizes, and
-pygame's layout cache remain unimplemented in this direct renderer.
+Independent horizontal/vertical font sizes and pygame's layout cache remain
+unimplemented in this direct renderer.
 
 ```lisp
 (let ((font (px.freetype:make-font nil 24))

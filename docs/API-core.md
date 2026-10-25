@@ -283,11 +283,33 @@ and the video thread. Restore the prior screensaver setting when an application
 temporarily changes it.
 
 `px.event:get` pumps input and returns queued events. `:types` filters events
-without consuming other types; `:limit` bounds the result. `poll` returns one
+without consuming other types; `:limit` bounds the result. `:exclude` instead
+retrieves all other types and leaves the excluded events queued. Pass one type
+or a list/vector, and use either `:types` or `:exclude`, not both. Invalid
+selection arguments are rejected before pumping or consuming events.
+`poll` returns one
 event or NIL; `wait` accepts an optional millisecond timeout. `clear`, `peek`,
 `set-blocked`, and `set-allowed` manage the queue.
 For `get`, `peek`, and `clear`, NIL selects all types, while an empty vector
 `#()` selects none.
+
+Pass `:pump nil` to inspect or consume only events already in the Lisp queue.
+This does not read SDL's native queue, deliver due timers, advance music queues,
+or run other pump hooks. The default remains T. `peek` and `clear` retain their
+positional type argument, so use `(px.event:peek nil :pump nil)` or
+`(px.event:clear nil :pump nil)` when selecting all types without pumping.
+Queue consumption and pumping stay on the video thread when video is active;
+workers may continue to post events.
+
+```lisp
+(px.event:pump)
+;; A UI pass can consume input while leaving this game's timer events queued.
+(let ((input (px.event:get :exclude turn-timer-type :pump nil)))
+  (dolist (event input) (handle-input event)))
+(px.event:get :types turn-timer-type :pump nil)
+```
+
+Selection follows the [pygame 2.6.1 event reference](https://github.com/pygame/pygame/blob/2.6.1/docs/reST/ref/event.rst).
 
 `get-blocked` accepts one type or a list/vector and returns true when any type
 is blocked. An empty sequence returns false. Passing NIL to `set-blocked`
