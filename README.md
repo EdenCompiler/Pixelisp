@@ -35,7 +35,7 @@ Available systems:
 | --- | --- |
 | `pixelisp/core` | Colors, rectangles, vectors, resource/view protocols, sprite bookkeeping; no SDL dependency |
 | `pixelisp` | SDL2 game toolkit, arrays, text/audio, input, threads, renderer and raw-audio extensions |
-| `pixelisp/freetype` | Direct FreeType rendering, rotation/vertical layout, synthetic styles, coverage arrays, and face/strike metrics |
+| `pixelisp/freetype` | Direct FreeType rendering, independent size axes, rotation/vertical layout, synthetic styles, coverage arrays, and face/strike metrics |
 | `pixelisp/midi` | PortMidi streams and MIDI utilities |
 | `pixelisp/camera` | Linux V4L2 capture and colorspace utilities |
 | `pixelisp/all` | All of the above; loading does not open devices |

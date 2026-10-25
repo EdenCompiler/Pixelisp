@@ -37,6 +37,22 @@
     (is (member (getf snapshot :phase) '(:lit :input)))
     (is (%clean-run-p))))
 
+(test encoded-melody-assets-preserve-samples-and-reuse-sounds
+  (px:with-init (:video nil)
+    (px.mixer:init :frequency 22050 :size -16 :channels 1 :buffer 256)
+    (let* ((samples (px.examples::%tone-samples 392 0.05 0.3))
+           (wave (px.examples::%tone-wave samples))
+           (session (px.examples::make-game-session :audio-enabled t)))
+      (px:with-resource (sound (px.mixer:make-sound nil :file wave))
+        (is (equalp samples (px.sndarray:array sound))))
+      (px.examples::%play-tone session 392 :encoded t)
+      (let ((sound (first (loop for value being the hash-values
+                               of (px.examples::session-tones session) collect value))))
+        (px.examples::%play-tone session 392 :encoded t)
+        (is (= 1 (hash-table-count (px.examples::session-tones session))))
+        (is (eq sound (px.mixer:get-sound (px.mixer:make-channel 1)))))))
+  (is (%clean-run-p)))
+
 (test runner-pause-resume-and-quit-use-the-event-queue
   (let ((frame 0))
     (let ((pixelisp.internal:*pump-hooks*

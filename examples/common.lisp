@@ -75,20 +75,47 @@ SNAPSHOT returns ordinary values that remain usable after native cleanup."
     (px.draw:circle image color (list (1+ radius) (1+ radius)) radius)
     image))
 
-(defun %play-tone (session frequency &key (duration 0.12) (volume 0.25))
-  "Synthesize once per note. A short envelope prevents clicks at either end."
+(defun %tone-samples (frequency duration volume)
+  "Create mono signed 16-bit samples with a short envelope to prevent clicks."
+  (let* ((count (max 1 (round (* 22050 duration))))
+         (samples (make-array count :element-type '(signed-byte 16))))
+    (dotimes (i count samples)
+      (let ((envelope (min 1d0 (/ i 160d0) (/ (- count i 1) 300d0))))
+        (setf (aref samples i)
+              (round (* 24000 volume envelope
+                        (sin (* 2 pi frequency (/ i 22050d0))))))))))
+
+(defun %tone-wave (samples)
+  "Package mono PCM as a WAV asset, without writing an intermediate file."
+  (let* ((data-size (* 2 (length samples)))
+         (bytes (make-array (+ 44 data-size) :element-type '(unsigned-byte 8)
+                                               :initial-element 0)))
+    ;; WAV headers use little-endian integers, regardless of the host byte order.
+    (labels ((integer-at (offset value size)
+               (dotimes (i size)
+                 (setf (aref bytes (+ offset i)) (ldb (byte 8 (* i 8)) value))))
+             (tag-at (offset tag)
+               (loop for character across tag for i from offset
+                     do (setf (aref bytes i) (char-code character)))))
+      (tag-at 0 "RIFF") (integer-at 4 (+ 36 data-size) 4) (tag-at 8 "WAVE")
+      (tag-at 12 "fmt ") (integer-at 16 16 4) (integer-at 20 1 2)
+      (integer-at 22 1 2) (integer-at 24 22050 4) (integer-at 28 44100 4)
+      (integer-at 32 2 2) (integer-at 34 16 2)
+      (tag-at 36 "data") (integer-at 40 data-size 4)
+      (loop for sample across samples for offset from 44 by 2
+            do (integer-at offset sample 2)))
+    bytes))
+
+(defun %play-tone (session frequency &key (duration 0.12) (volume 0.25) encoded)
+  "Cache each note; ENCODED exercises the same decoder used for packed WAV assets."
   (when (session-audio-enabled session)
-    (let* ((key (list frequency duration volume))
+    (let* ((key (list frequency duration volume encoded))
            (sound (or (gethash key (session-tones session))
                       (setf (gethash key (session-tones session))
-                            (let* ((count (max 1 (round (* 22050 duration))))
-                                   (samples (make-array count :element-type '(signed-byte 16))))
-                              (dotimes (i count)
-                                (let ((envelope (min 1d0 (/ i 160d0) (/ (- count i 1) 300d0))))
-                                  (setf (aref samples i)
-                                        (round (* 24000 volume envelope
-                                                  (sin (* 2 pi frequency (/ i 22050d0))))))))
-                              (px.sndarray:make-sound samples))))))
+                            (let ((samples (%tone-samples frequency duration volume)))
+                              (if encoded
+                                  (px.mixer:make-sound nil :file (%tone-wave samples))
+                                  (px.sndarray:make-sound samples)))))))
       (px.mixer:play sound))))
 
 (defun %track-input (session event)

@@ -20,7 +20,7 @@
 (defconstant style-default 255)
 (defvar *initialized* t)
 (defclass font (pixelisp.internal:resource)
-  ((size :initarg :size :accessor size)
+  ((size :initarg :size :reader %size)
    (kerning :initarg :kerning :initform t :accessor kerning)
    (antialiased :initarg :antialiased :initform t :accessor antialiased)
    (origin :initarg :origin :initform nil :accessor origin)
@@ -40,30 +40,115 @@
 (defun get-default-font () (px.font:get-default-font))
 (defun get-fonts () (px.font:get-fonts))
 (defun match-font (name &key bold italic) (px.font:match-font name :bold bold :italic italic))
+(defun %normalize-size (value)
+  "Copy and validate a scalar pixel size or a horizontal/vertical pixel pair."
+  (cond
+    ((realp value)
+     (unless (> value 0) (error "A scalar font size must be positive."))
+     value)
+    ((and (typep value 'sequence) (not (stringp value)) (= (length value) 2))
+     (let ((width (elt value 0)) (height (elt value 1)))
+       (unless (and (realp width) (realp height) (>= width 0) (>= height 0))
+         (error "A font size pair must contain non-negative real pixel sizes."))
+       (when (zerop width)
+         (if (zerop height)
+             (error "A zero size has no default FreeType pixel size.")
+             (error "A zero horizontal size cannot be paired with a non-zero vertical size.")))
+       ;; Pygame treats a zero vertical component as an automatic axis. Keep
+       ;; the pair as supplied so the getter is explicit and caller-independent.
+       (list width height)))
+    (t (error "Font size must be a positive real pixel size or a two-value sequence."))))
+(defun %size-axes (value)
+  "Return native horizontal and vertical ppem values for a normalized size."
+  (flet ((native-size (axis)
+           (let ((pixels (max 1 (round axis))))
+             ;; FT_Set_Pixel_Sizes takes unsigned C integers. Check before the
+             ;; FFI call so a bignum cannot silently wrap to an unrelated size.
+             (check-type pixels (unsigned-byte 32))
+             pixels)))
+    (if (numberp value)
+        (values 0 (native-size value))
+        (values (native-size (first value))
+                (if (zerop (second value)) 0 (native-size (second value)))))))
+(defun %size-vertical (value)
+  "Return the vertical pixel dimension used by vertical metrics and strength."
+  (if (numberp value) value (if (zerop (second value)) (first value) (second value))))
+(defun %copy-size (value)
+  (if (numberp value) value (copy-list value)))
+(defun %bitmap-size-valid-p (face value)
+  "Check bitmap-only faces against the nominal sizes reported by FreeType."
+  (or (freetype2-types:ft-face-face-flags-test face '(:scalable))
+      (let* ((count (freetype2-types:ft-face-num-fixed-sizes face))
+             (sizes (cffi:mem-ref
+                     (cffi:foreign-slot-pointer
+                      (freetype2-types:w* face)
+                      '(:struct freetype2-types::foreign-ft-facerec)
+                      'freetype2-types::available-sizes)
+                     :pointer)))
+        (loop for index below count
+              thereis
+              (let* ((record (cffi:mem-aptr sizes
+                                            '(:struct freetype2-types::foreign-ft-bitmap-size)
+                                            index))
+                     (point-size (floor (+ (cffi:foreign-slot-value
+                                            record '(:struct freetype2-types::foreign-ft-bitmap-size)
+                                            'freetype2-types::size) 32) 64))
+                     ;; FT_Set_Pixel_Sizes consumes ppem, not the dimensions
+                     ;; of the rasterized strike bitmap.
+                     (width (/ (cffi:foreign-slot-value
+                                record '(:struct freetype2-types::foreign-ft-bitmap-size)
+                                'freetype2-types::x-ppem) 64.0))
+                     (height (/ (cffi:foreign-slot-value
+                                 record '(:struct freetype2-types::foreign-ft-bitmap-size)
+                                 'freetype2-types::y-ppem) 64.0)))
+                (if (numberp value)
+                    (or (= value point-size) (and (= value width) (= value height)))
+                    (and (= (first value) width)
+                         (or (zerop (second value)) (= (second value) height)))))))))
+(defun %set-face-size (face value)
+  "Validate a size before changing the face, leaving it untouched on error."
+  (multiple-value-bind (width height) (%size-axes value)
+    (unless (%bitmap-size-valid-p face value)
+      (error "The requested size is not available in this bitmap-only font."))
+    (freetype2:set-pixel-sizes face width height)))
+(defun size (font)
+  "Return the default size in pixels; pairs are fresh (width height) lists."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%copy-size (%size font)))
+(defun (setf size) (value font)
+  "Set the default pixel size, accepting a scalar or (horizontal vertical) pair."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (let ((normalized (%normalize-size value)))
+    (%set-face-size (pixelisp.internal:handle font) normalized)
+    (setf (slot-value font 'size) normalized)
+    ;; SETF returns its new value; do not let that expose the stored pair.
+    (%copy-size normalized)))
 (defun make-font (&optional filename (size 16) &key (kerning t) (antialiased t))
-  "Open a directly rendered FreeType face at SIZE pixels."
-  (check-type size (real (0) *))
-  (init)
-  (let* ((path (or filename (get-default-font)))
-         (face (freetype2:new-face path))
-         (complete nil) (finalizer-cancelled nil))
-    (unwind-protect
-         (progn
-           ;; Keep the dependency's finalizer until native face setup succeeds.
-           (freetype2:set-pixel-sizes face 0 (max 1 (round size)))
-           (trivial-garbage:cancel-finalization face)
-           (setf finalizer-cancelled t)
-           (let ((resource (pixelisp.internal:register-resource
-                            (make-instance 'font :handle face :path path
-                                           :size size :kerning kerning :antialiased antialiased))))
-             (setf complete t)
-             resource))
-      (when (and (not complete) finalizer-cancelled)
-        ;; We cancelled FreeType's finalizer immediately before registration.
-        (when (not (cffi:null-pointer-p (freetype2-types:fw-ptr face)))
-          (freetype2-ffi:ft-done-face (freetype2-types:w* face))
-          (freetype2-types:libc-free (freetype2-types:fw-ptr face))
-          (setf (freetype2-types:fw-ptr face) (cffi:null-pointer)))))))
+  "Open a directly rendered FreeType face at SIZE pixels (or (width height))."
+  (let ((size (%normalize-size size)))
+    (init)
+    (let* ((path (or filename (get-default-font)))
+           (face (freetype2:new-face path))
+           (complete nil) (finalizer-cancelled nil))
+      (unwind-protect
+           (progn
+             ;; Keep the dependency's finalizer until native face setup succeeds.
+             (%set-face-size face size)
+             (trivial-garbage:cancel-finalization face)
+             (setf finalizer-cancelled t)
+             (let ((resource (pixelisp.internal:register-resource
+                              (make-instance 'font :handle face :path path
+                                             :size size :kerning kerning :antialiased antialiased))))
+               (setf complete t)
+               resource))
+        (when (and (not complete) finalizer-cancelled)
+          ;; We cancelled FreeType's finalizer immediately before registration.
+          (when (not (cffi:null-pointer-p (freetype2-types:fw-ptr face)))
+            (freetype2-ffi:ft-done-face (freetype2-types:w* face))
+            (freetype2-types:libc-free (freetype2-types:fw-ptr face))
+            (setf (freetype2-types:fw-ptr face) (cffi:null-pointer))))))))
 (defun font (&optional filename (size 16) &key (kerning t) (antialiased t))
   (make-font filename size :kerning kerning :antialiased antialiased))
 (defun sys-font (name size &key bold italic)
@@ -72,7 +157,8 @@
 (defun %face (font &optional requested-size)
   (check-type font font)
   (pixelisp.internal:ensure-live font)
-  (freetype2:set-pixel-sizes (pixelisp.internal:handle font) 0 (max 1 (round (or requested-size (size font)))))
+  (%set-face-size (pixelisp.internal:handle font)
+                  (%normalize-size (or requested-size (%size font))))
   (pixelisp.internal:handle font))
 (defun %valid-style-p (value)
   (and (integerp value) (<= 0 value) (= 0 (logandc2 value 15))))
@@ -195,13 +281,14 @@
 
 (defun %style-outline (font outline active-style requested-size)
   "Change the current glyph's shape before its placement and rotation."
-  (let ((scale (if (logtest active-style style-wide) (+ 1 (strength font)) 1))
-        (shear (if (logtest active-style style-oblique) 0.21255656 0)))
+  (let* ((pixel-size (%size-vertical (%normalize-size (or requested-size (%size font)))))
+         (scale (if (logtest active-style style-wide) (+ 1 (strength font)) 1))
+         (shear (if (logtest active-style style-oblique) 0.21255656 0)))
     (%transform-outline outline
                         (list (round (* 65536 scale)) (round (* 65536 shear)) 0 65536))
     (when (logtest active-style style-strong)
       (freetype2:outline-embolden
-       outline (round (* 64 (or requested-size (size font)) (strength font)))))))
+       outline (round (* 64 pixel-size (strength font)))))))
 
 (defun %raster-layout-glyph (font face character requested-size active-style degrees vertical-layout)
   "Return coverage, bitmap X/Y bearings, and the unrotated pen advance.
@@ -250,7 +337,7 @@ the next character is loaded; no face-wide transform survives this call."
   "Return the ordinary horizontal underline mask and its baseline Y offset."
   (let* ((upem (max 1 (freetype2-types:ft-face-units-per-em face)))
          (adjustment (underline-adjustment font))
-         (font-size (or requested-size (size font)))
+         (font-size (%size-vertical (%normalize-size (or requested-size (%size font)))))
          (position (if (minusp adjustment)
                        (* adjustment (freetype2-types:ft-face-ascender face))
                        (* -1 adjustment (freetype2-types:ft-face-underline-position face))))

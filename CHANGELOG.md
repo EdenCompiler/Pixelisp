@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add independent FreeType horizontal/vertical pixel sizes with copied property
+  values, per-call overrides, validated writes and bitmap-strike checks.
+- Decode sound assets from encoded octet vectors and caller-owned binary
+  streams, keeping raw PCM buffers distinct. Exercise memory decoding in
+  Echo Grove's cached melody cues.
+- Export RGBA/ARGB premultiplied pixel bytes with pygame rounding, native
+  alpha-mask checks and unchanged source pixels. Extend native tests and pygame
+  comparisons for the new media capabilities.
 - Add FreeType outline rotation with normalized angles and per-call overrides,
   vertical glyph placement, and early validation of unsupported style/layout
   combinations. Keep rasterization, styling and layout in commented helpers.

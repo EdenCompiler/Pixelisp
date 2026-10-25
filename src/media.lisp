@@ -29,7 +29,8 @@
            #:set-volume #:get-volume #:get-length #:get-raw #:get-num-channels
            #:get-sound #:queue #:get-queue #:update #:close #:sample-format
            #:sound-frame-count #:sound-channels #:sound-element-type
-           #:sound-sample-ref #:sound-sample-set #:get-sdl-mixer-version))
+           #:sound-sample-ref #:sound-sample-set #:get-sdl-mixer-version
+           #:load-sound-bytes))
 (defpackage #:pixelisp.mixer.music
   (:use #:cl) (:nicknames #:px.mixer.music) (:shadow #:load)
   (:export #:load #:unload #:play #:stop #:pause #:unpause #:rewind #:fadeout
@@ -145,10 +146,17 @@ NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in
                         (%save-bmp (pixelisp.internal:%ptr native) rw 1))))))
     (when (minusp rc) (error 'pixelisp:error :operation 'save :message "Unable to save image"))
     filename))
-(defun %format (format)
-  (let ((name (string-upcase (string format))))
-    (unless (member name '("RGB" "RGBA" "RGBX" "ARGB" "BGRA" "BGR") :test #'string=)
-      (error 'pixelisp:unsupported-feature :operation 'from-string :message "Use RGB, RGBA, RGBX, ARGB, BGRA or BGR pixel bytes"))
+(defun %format (format &optional (operation 'from-string))
+  (let ((name (substitute #\_ #\- (string-upcase (string format)))))
+    (unless (member name (if (eq operation 'to-string)
+                             '("RGB" "RGBA" "RGBX" "ARGB" "BGRA" "BGR"
+                               "RGBA_PREMULT" "ARGB_PREMULT")
+                             '("RGB" "RGBA" "RGBX" "ARGB" "BGRA" "BGR"))
+                    :test #'string=)
+      (error 'pixelisp:unsupported-feature :operation operation
+             :message (if (eq operation 'to-string)
+                          "Use RGB, RGBA, RGBX, ARGB, BGRA, BGR, RGBA_PREMULT or ARGB_PREMULT output bytes"
+                          "Use RGB, RGBA, RGBX, ARGB, BGRA or BGR pixel bytes")))
     name))
 (defun from-string (bytes size format &optional flipped)
   "Copy packed octets into a surface. SIZE is (width height); FLIPPED reverses rows."
@@ -169,15 +177,29 @@ NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in
                  (a (if (find #\A fmt) (elt bytes (+ offset (position #\A fmt))) 255)))
             (px.surface:set-at surface (list x y) (list r g b a))))))))
 (defun to-string (surface format &optional flipped)
-  "Return a packed specialized octet vector, ordered by rows."
-  (let* ((fmt (%format format)) (channels (length fmt))
+  "Return packed octets in FORMAT, ordered by rows. Premultiplied output uses per-pixel alpha."
+  (let* ((fmt (%format format 'to-string))
+         (premultiplied (member fmt '("RGBA_PREMULT" "ARGB_PREMULT") :test #'string=))
+         (order (if premultiplied (subseq fmt 0 4) fmt))
+         (channels (length order))
          (width (px.surface:width surface)) (height (px.surface:height surface))
          (bytes (make-array (* width height channels) :element-type '(unsigned-byte 8))))
+    ;; The wrapper's alpha flag can be set for compatibility even when a native
+    ;; pixel format has no alpha mask (for example an imported RGBX buffer).
+    ;; pygame's premultiplied export requires real per-pixel alpha storage.
+    (when (and premultiplied (zerop (fourth (px.surface:get-masks surface))))
+      (error 'pixelisp:unsupported-feature :operation 'to-string
+             :message "Premultiplied output requires a surface with a per-pixel alpha mask"))
     (dotimes (y height bytes)
       (dotimes (x width)
         (multiple-value-bind (r g b a)
             (pixelisp.internal:rgba (px.surface:get-at surface (list x (if flipped (- height 1 y) y))))
-          (loop for channel across fmt for k from 0 do
+          (when premultiplied
+            ;; pygame 2.6.1 uses integer floor division for each color channel.
+            (setf r (floor (* r a) 255)
+                  g (floor (* g a) 255)
+                  b (floor (* b a) 255)))
+          (loop for channel across order for k from 0 do
             (setf (aref bytes (+ k (* channels (+ x (* width y)))))
                   (case channel (#\R r) (#\G g) (#\B b) (#\A a) (#\X 255)))))))))
 (setf (fdefinition 'from-bytes) #'from-string (fdefinition 'to-bytes) #'to-string)
@@ -351,6 +373,9 @@ available after script selection. Return SCRIPT on success."
 (cffi:defcfun ("Mix_CloseAudio" %close-audio) :void)
 (cffi:defcfun ("Mix_QuerySpec" %query) :int (frequency :pointer) (format :pointer) (channels :pointer))
 (cffi:defcfun ("Mix_LoadWAV_RW" %load-wav) :pointer (source :pointer) (free :int))
+(cffi:defcfun ("SDL_RWFromConstMem" %rw-from-const-mem) :pointer
+  (memory :pointer) (size :int))
+(cffi:defcfun ("SDL_RWFromFile" %rw-from-file) :pointer (file :string) (mode :string))
 (cffi:defcfun ("Mix_QuickLoad_RAW" %raw-chunk) :pointer (memory :pointer) (length :uint32))
 (cffi:defcfun ("Mix_FreeChunk" %free-chunk) :void (chunk :pointer))
 (cffi:defcfun ("Mix_PlayChannelTimed" %play) :int (channel :int) (chunk :pointer) (loops :int) (ticks :int))
@@ -445,20 +470,78 @@ available after script selection. Return SCRIPT on success."
   (cffi:foreign-slot-value (%sound-pointer sound) '(:struct %chunk) 'alen))
 (defun sound-frame-count (sound)
   (/ (%sample-bytes sound) (* (sound-channels sound) (/ (abs (sample-format sound)) 8))))
-(defun make-sound (&optional filename &key array buffer)
-  "Load a decoded sound file, copy ARRAY samples, or copy raw octet BUFFER data."
-  (when (and array buffer)
-    (error 'pixelisp:error :operation 'make-sound :message "Choose either ARRAY or BUFFER, not both"))
-  (when (and filename (or array buffer))
-    (error 'pixelisp:error :operation 'make-sound :message "Choose a filename, ARRAY, or BUFFER as the sound source"))
-  (when (and (null array) (null buffer) (null filename))
-    (error 'type-error :datum filename :expected-type 'pathname))
-  (when array
-    (unless (arrayp array)
-      (error 'type-error :datum array :expected-type 'array)))
+(defun %encoded-sound-octets (source)
+  "Return encoded sound octets; binary streams are read to EOF and left open."
+  (cond
+    ((typep source '(vector (unsigned-byte 8))) source)
+    ((streamp source)
+     (unless (and (input-stream-p source)
+                  (subtypep (stream-element-type source) '(unsigned-byte 8)))
+       (error 'simple-type-error :datum source :expected-type 'stream
+              :format-control "Expected a binary input stream containing sound octets; received ~S"
+              :format-arguments (list source)))
+     (let ((bytes (make-array 0 :element-type '(unsigned-byte 8)
+                              :adjustable t :fill-pointer 0)))
+       (loop for byte = (read-byte source nil :eof)
+             until (eq byte :eof)
+             do (when (>= (length bytes) #x7fffffff)
+                  (error 'pixelisp:error :operation 'make-sound
+                         :message "Encoded sound exceeds SDL's supported size"))
+                (vector-push-extend byte bytes))
+       bytes))
+    (t (error 'type-error :datum source
+              :expected-type '(or pathname string stream (vector (unsigned-byte 8)))))))
+
+(defun load-sound-bytes (bytes)
+  "Decode encoded WAV octets into an owned Sound; raw PCM belongs in :BUFFER."
+  (unless (typep bytes '(vector (unsigned-byte 8)))
+    (error 'type-error :datum bytes :expected-type '(vector (unsigned-byte 8))))
+  (make-sound nil :file bytes))
+
+(defun %load-sound-memory (bytes)
+  "Decode encoded octets synchronously while keeping the SDL_RWops backing bytes alive."
+  (let ((length (length bytes)))
+    (when (zerop length)
+      (error 'pixelisp:error :operation 'make-sound :message "Encoded sound data is empty"))
+    (when (> length #x7fffffff)
+      (error 'pixelisp:error :operation 'make-sound :message "Encoded sound exceeds SDL's supported size"))
+    (let ((memory (cffi:foreign-alloc :uint8 :count length)))
+      (unwind-protect
+           (progn
+             (dotimes (index length)
+               (setf (cffi:mem-aref memory :uint8 index) (aref bytes index)))
+             (let ((rw (%rw-from-const-mem memory length)))
+               (when (cffi:null-pointer-p rw)
+                 (error 'pixelisp:error :operation 'make-sound
+                        :message (or (pixelisp.image::%sdl-error) "Unable to create sound byte stream")))
+               ;; SDL_mixer synchronously decodes and closes the RWops via freesrc.
+               (%load-wav rw 1)))
+        (cffi:foreign-free memory)))))
+
+(defun make-sound (&optional filename &key array buffer file)
+  "Load a sound file, decode encoded :FILE data, copy ARRAY samples, or copy raw :BUFFER PCM."
+  ;; Complete source validation before opening the mixer or allocating native memory.
+  (let ((sources (count-if #'identity (list filename array buffer file))))
+    (unless (= sources 1)
+      (error 'pixelisp:error :operation 'make-sound
+             :message "Choose exactly one source: filename, :FILE, :ARRAY, or :BUFFER")))
+  (when (and filename (not (or (pathnamep filename) (stringp filename))))
+    (error 'type-error :datum filename :expected-type '(or pathname string)))
+  (when array (unless (arrayp array) (error 'type-error :datum array :expected-type 'array)))
   (when buffer
     (unless (typep buffer '(vector (unsigned-byte 8)))
       (error 'type-error :datum buffer :expected-type '(vector (unsigned-byte 8)))))
+  (when (and file (or (streamp file) (typep file '(vector (unsigned-byte 8)))))
+    (setf file (%encoded-sound-octets file)))
+  (when (and file (not (or (pathnamep file) (stringp file)
+                           (typep file '(vector (unsigned-byte 8)))))
+    (error 'type-error :datum file
+           :expected-type '(or pathname string stream (vector (unsigned-byte 8))))))
+  (when (and file (typep file '(vector (unsigned-byte 8)))
+             (or (zerop (length file)) (> (length file) #x7fffffff)))
+    (error 'pixelisp:error :operation 'make-sound
+           :message "Encoded sound size must be between 1 and SDL's supported maximum"))
+  (when (typep file '(vector (unsigned-byte 8))) (setf file (copy-seq file)))
   (%need-init)
   (multiple-value-bind (frequency format channels) (get-init)
     (let* ((ctype (ecase format (8 :uint8) (-8 :int8) (16 :uint16) (-16 :int16) (-32 :int32)))
@@ -486,11 +569,17 @@ available after script selection. Return SCRIPT on success."
                    (dotimes (i bytes)
                      (setf (cffi:mem-aref storage :uint8 i) (elt buffer i))))
                (setf native (%raw-chunk storage bytes)))
-             (unless bytes
-               (let ((rw (pixelisp.image::%rw-file (namestring (pathname filename)) "rb")))
-                 (when (cffi:null-pointer-p rw)
-                   (error 'pixelisp:error :operation 'make-sound :message (or (pixelisp.image::%sdl-error) "Unable to open sound file")))
-                 (setf native (%load-wav rw 1))))
+             (when (or filename file)
+               (let ((source (or file filename)))
+                 (setf native
+                       (if (typep source '(vector (unsigned-byte 8)))
+                           (%load-sound-memory source)
+                           (let ((rw (%rw-from-file (namestring (pathname source)) "rb")))
+                             (when (cffi:null-pointer-p rw)
+                               (error 'pixelisp:error :operation 'make-sound
+                                      :message (or (pixelisp.image::%sdl-error) "Unable to open sound file")))
+                             ;; SDL_mixer closes this synchronously after decoding.
+                             (%load-wav rw 1))))))
              (when (cffi:null-pointer-p native)
                (error 'pixelisp:error :operation 'make-sound :message (pixelisp.image::%sdl-error)))
              (let ((sound (pixelisp.internal:register-resource
@@ -501,7 +590,8 @@ available after script selection. Return SCRIPT on success."
         (unless complete
           (when (and native (not (cffi:null-pointer-p native))) (%free-chunk native))
           (when storage (cffi:foreign-free storage)))))))
-(defun sound (&optional filename &key array buffer) (make-sound filename :array array :buffer buffer))
+(defun sound (&optional filename &key array buffer file)
+  (make-sound filename :array array :buffer buffer :file file))
 (defun make-channel (id) (check-type id (integer 0 *))
   (unless (< id (get-num-channels)) (error 'pixelisp:error :operation 'make-channel :message "Invalid mixer channel"))
   (make-instance 'channel :id id))

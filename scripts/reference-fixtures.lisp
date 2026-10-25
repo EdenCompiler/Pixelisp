@@ -664,6 +664,47 @@
             (px.surface:get-alpha source)
             (if (px.surface:get-locked source) 1 0)))))
 
+(defun fixture-premultiplied-image-bytes ()
+  (px.surface:with-surface (surface '(2 2) :alpha t)
+    (loop for alpha in '(0 1 128 254) for index from 0
+          do (px.surface:set-at surface (list (mod index 2) (floor index 2))
+                                (list 200 51 129 alpha)))
+    (px.surface:set-alpha surface 17)
+    (px.surface:set-colorkey surface '(200 51 129))
+    (px.surface:set-clip surface '(1 0 1 1))
+    (loop for format in '(:rgba-premult :argb-premult) append
+      (loop for flipped in '(nil t)
+            collect (coerce (px.image:to-bytes surface format flipped) 'list)))))
+
+(defun fixture-encoded-sound-memory ()
+  ;; This complete PCM WAV mirrors Python's wave writer. The prefix exercises
+  ;; decoding from a caller-owned stream's current position.
+  (let* ((bytes (make-array 52 :element-type '(unsigned-byte 8) :initial-contents
+                          '(82 73 70 70 44 0 0 0 87 65 86 69 102 109 116 32
+                            16 0 0 0 1 0 1 0 34 86 0 0 68 172 0 0 2 0 16 0
+                            100 97 116 97 8 0 0 0 52 18 220 254 0 0 255 127)))
+         (path (merge-pathnames (format nil "pixelisp-reference-~A.wav" (gensym))
+                               (uiop:temporary-directory))))
+    (px.mixer:quit)
+    (unwind-protect
+         (progn
+           (with-open-file (stream path :direction :output :element-type '(unsigned-byte 8))
+             (write-sequence #(112 114 101 102 105 120) stream)
+             (write-sequence bytes stream))
+           (px.mixer:init :frequency 22050 :size -16 :channels 1)
+           (with-open-file (stream path :element-type '(unsigned-byte 8))
+             (file-position stream 6)
+             (px:with-resource (sound (px.mixer:make-sound nil :file stream))
+               (coerce (px.mixer:get-raw sound) 'list))))
+      (px.mixer:quit)
+      (when (probe-file path) (delete-file path)))))
+
+(defun fixture-freetype-independent-size-axes ()
+  (px:with-resource (font (px.freetype:make-font nil '(14 30)))
+    (list (loop for size in '((14 30) (28 30) (14 15) (24 0))
+                collect (mapcar #'round (first (px.freetype:get-metrics font "A" :size size))))
+          (mapcar #'round (px.freetype:size font)))))
+
 (defun fixture-data ()
   (px.surface:with-surface (source '(2 2) :alpha t)
     (loop for pixel in '((10 2 3 127) (20 5 6 128) (30 8 9 255) (40 11 12 0))
@@ -733,7 +774,9 @@
                    px.freetype:style-oblique px.freetype:style-underline
                    px.freetype:style-wide px.freetype:style-default)
              (fixture-renderer-blitting) (fixture-freetype-layout-controls)
-             (fixture-freetype-baseline-ink-bounds))))))))
+             (fixture-freetype-baseline-ink-bounds)
+             (fixture-premultiplied-image-bytes) (fixture-encoded-sound-memory)
+             (fixture-freetype-independent-size-axes))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

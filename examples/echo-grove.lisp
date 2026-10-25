@@ -12,7 +12,9 @@
 
 (defun %echo-note (state session pad)
   (setf (%echo-state-active state) pad (%echo-state-flash-time state) 0.3d0)
-  (%play-tone session (nth pad '(262 330 392 523)) :duration 0.32 :volume 0.3))
+  ;; Decode each cached cue from an in-memory WAV, just like an asset bundled
+  ;; inside a game archive. The note plays without creating a temporary file.
+  (%play-tone session (nth pad '(262 330 392 523)) :duration 0.32 :volume 0.3 :encoded t))
 
 (defun %echo-mistake (state session)
   (decf (%echo-state-lives state))

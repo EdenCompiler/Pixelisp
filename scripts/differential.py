@@ -10,6 +10,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import subprocess
+import wave
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -44,7 +45,46 @@ CASE_NAMES = [
     "SDL2 image modulation pixels", "RLE colorkey alpha and post-blit lock state",
     "custom SDL blend modes", "FreeType face information", "FreeType style flags",
     "SDL2 renderer blitting", "FreeType layout controls", "FreeType baseline ink bounds",
+    "premultiplied image bytes", "encoded sound memory", "FreeType independent size axes",
 ]
+
+
+def premultiplied_image_bytes():
+    surface = pygame.Surface((2, 2), pygame.SRCALPHA, 32)
+    for index, alpha in enumerate([0, 1, 128, 254]):
+        surface.set_at((index % 2, index // 2), (200, 51, 129, alpha))
+    # Blanket alpha, keys, and the drawing clip must not change raw export.
+    surface.set_alpha(17)
+    surface.set_colorkey((200, 51, 129))
+    surface.set_clip((1, 0, 1, 1))
+    return [list(pygame.image.tobytes(surface, fmt, flipped))
+            for fmt in ["RGBA_PREMULT", "ARGB_PREMULT"]
+            for flipped in [False, True]]
+
+
+def encoded_sound_memory():
+    pcm = bytes([0x34, 0x12, 0xDC, 0xFE, 0, 0, 0xFF, 0x7F])
+    output = BytesIO()
+    with wave.open(output, "wb") as asset:
+        asset.setparams((1, 2, 22050, 0, "NONE", "not compressed"))
+        asset.writeframes(pcm)
+    pygame.mixer.quit()
+    pygame.mixer.init(22050, -16, 1)
+    try:
+        stream = BytesIO(b"prefix" + output.getvalue())
+        stream.seek(6)
+        sound = pygame.mixer.Sound(file=stream)
+        # Stream ownership is a documented Lisp adaptation; compare the audio.
+        return list(sound.get_raw())
+    finally:
+        pygame.mixer.quit()
+
+
+def freetype_independent_size_axes():
+    font = pygame.freetype.Font(str(ROOT / "assets/fonts/DejaVuSans.ttf"), (14, 30))
+    metrics = [list(map(round, font.get_metrics("A", size=size)[0]))
+               for size in [(14, 30), (28, 30), (14, 15), (24, 0)]]
+    return [metrics, list(map(round, font.size))]
 
 
 def red_values(surface):
@@ -884,6 +924,7 @@ def reference():
          pygame.freetype.STYLE_OBLIQUE, pygame.freetype.STYLE_UNDERLINE,
          pygame.freetype.STYLE_WIDE, pygame.freetype.STYLE_DEFAULT],
         renderer_blitting(), freetype_layout_controls(), freetype_baseline_ink_bounds(),
+        premultiplied_image_bytes(), encoded_sound_memory(), freetype_independent_size_axes(),
     ]
 
 

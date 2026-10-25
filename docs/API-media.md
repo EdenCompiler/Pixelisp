@@ -20,6 +20,14 @@ dimensions and channel order; it does not decode a PNG/JPEG file.
 
 `from-string` and `from-bytes` copy packed pixel data into a new surface. `to-string` and `to-bytes` copy pixels out as a specialized `(unsigned-byte 8)` vector. Both functions take dimensions as `(width height)` and a channel order such as `:rgb`, `:rgba`, `:rgbx`, `:argb`, `:bgra`, or `:bgr`. A true `flipped` argument reverses row order. Alpha is 255 for formats without an alpha channel.
 
+Exports also accept `:rgba-premult` and `:argb-premult` (pygame's underscore
+spellings, such as `"RGBA_PREMULT"`, work too). Each RGB channel becomes
+`floor(channel * alpha / 255)`; alpha itself stays unchanged. This requires a
+real per-pixel alpha channel. The source pixels, clip, color key, and blanket
+alpha remain unchanged. Use this when supplying pixels to a compositor that
+expects premultiplied colors. As in pygame, these are output formats only;
+raw imports use the ordinary channel-order names.
+
 ```lisp
 (let* ((pixels (make-array 16 :element-type '(unsigned-byte 8)
                            :initial-contents '(255 0 0 255 0 255 0 255
@@ -58,7 +66,32 @@ Call `px.mixer:init` before loading or playing sounds. It opens SDL_mixer's shar
 
 Mixer shutdown is repeatable. Read-only playback queries return their idle value when the mixer is closed (`get-busy` is false, `get-pos` is -1, and the channel count is zero); operations that need an open mixer signal `px:initialization-error`. `px.font:quit` also closes fonts and is safe to call more than once.
 
-`(px.mixer:make-sound pathname)` loads a decoded WAV sample. `px.sndarray:make-sound` copies a specialized Lisp array into mixer-owned sample storage; mono samples use a one-dimensional vector, and multichannel samples use `(frames channels)`. `px.sndarray:array` returns a copy. `px.sndarray:samples` returns a live `px.buffer` view whose writes change the sound data. Close the view when finished; disposing its sound invalidates it.
+`(px.mixer:make-sound pathname)` decodes a sound file through SDL_mixer.
+`(px.mixer:make-sound nil :file source)` also accepts a pathname, string path,
+encoded `(unsigned-byte 8)` vector, or binary input stream. Streams are read
+from their current position to EOF and remain open. `load-sound-bytes` is the
+explicit octet-vector decoder. Decoded samples belong to the returned sound;
+the input vector or stream may be reused as soon as decoding returns. WAV is
+covered by the tests; other codecs depend on the linked SDL_mixer build.
+
+Choose exactly one source: the positional path, `:file`, `:array`, or `:buffer`.
+`:buffer` copies raw PCM in the active mixer's format; it does not decode a WAV
+header. `px.sndarray:make-sound` copies a specialized Lisp array into sample
+storage; mono samples use a one-dimensional vector, and multichannel samples
+use `(frames channels)`. `px.sndarray:array` returns a copy.
+`px.sndarray:samples` returns a live `px.buffer` view whose writes change the
+sound data. Close the view when finished; disposing its sound invalidates it.
+
+```lisp
+;; ASSET-BYTES could come from a resource archive or an embedded WAV vector.
+(px:with-resource (effect (px.mixer:load-sound-bytes asset-bytes))
+  (px.mixer:play effect)
+  ;; A game normally keeps EFFECT alive across many frames. Here we wait for it.
+  (loop while (px.mixer:get-busy effect) do (px.time:delay 10)))
+```
+
+Echo Grove packages its generated melody cues as WAV bytes and decodes them
+once per cached note. This exercises memory loading during ordinary gameplay.
 
 `px.mixer:play` returns a channel object when playback starts. Channels can be selected with `:channel`, repeated with `:loops` (`-1` means repeat indefinitely), limited with `:maxtime`, or started with `:fade-ms`. `stop`, `pause`, `unpause`, and `fadeout` accept a channel, a sound, or NIL for all channels. `set-volume` and `get-volume` use the range 0 to 1. `queue` schedules the next sound on a channel. Call `px.mixer:update` once per game-loop iteration (the normal event pump also calls it) so queued sounds advance on the Lisp thread.
 
@@ -191,8 +224,29 @@ mode; for nonzero coverage, `:invert t` writes `255 - coverage`.
 
 The reference is [pygame 2.6.1 FreeType](https://github.com/pygame/pygame/blob/2.6.1/docs/reST/ref/freetype.rst),
 with native metric units described by [FreeType's face fields](https://freetype.org/freetype2/docs/reference/ft2-face_creation.html#ft_facerec).
-Independent horizontal/vertical font sizes and pygame's layout cache remain
-unimplemented in this direct renderer.
+The default `size` property, constructors, sized metrics, and per-call `:size`
+arguments accept a positive scalar or a two-value list/vector
+`(horizontal vertical)`. Sizes retain Pixelisp's pixel units; pygame uses
+points and a configurable resolution. Scalar sizes keep the font's normal
+aspect ratio. A pair selects independent horizontal and vertical ppem; a zero
+vertical value, such as `'(24 0)`, selects equal ppem. Zero horizontal values
+and undefined all-zero sizes are rejected. Bitmap-only fonts require a matching
+native strike and cannot be stretched to arbitrary sizes.
+
+The property copies pairs on input and output. A per-call override leaves the
+default size unchanged, and invalid assignments preserve it. Fractional sizes
+round to native pixel sizes, with a minimum of one pixel on nonzero axes.
+Strong styling and underline sizing follow the vertical size. Pygame's layout
+cache remains unimplemented.
+
+```lisp
+(px:with-resource (font (px.freetype:make-font nil '(16 32)))
+  (px:with-resource (label (px.freetype:render font "TALL" '(180 230 255)))
+    (px.surface:blit screen label '(30 60)))
+  ;; A wider one-off label without changing the stored (16 32) size.
+  (px.freetype:render-to font screen '(30 110) "WIDE" '(255 220 140) nil
+                         :size #(32 20)))
+```
 
 ```lisp
 (let ((font (px.freetype:make-font nil 24))

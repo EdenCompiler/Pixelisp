@@ -21,7 +21,9 @@ The games demonstrate library features through their mechanics: Prism Breaker
 uses rectangles, vectors, native surface blits, and generated sound; Orbit
 Patrol uses cached rotations with RLE source blits, vectors, and pixel-mask collisions; Crater Command
 joins rendered terrain to a mutable mask; Echo Grove combines event input,
-cached text, ordered pad sprites, and optional audio. Game state and update
+cached text, ordered pad sprites, and optional audio. Its melody cues are
+generated WAV assets decoded from memory and cached for replay; other games
+construct sounds directly from sample arrays. Game state and update
 helpers are ordinary Lisp data and functions, which makes the rules testable
 without a native window.
 
