@@ -116,9 +116,11 @@
 (defun (setf image-blend-mode) (value image)
   (%image-live image)
   (unless (or (member value '(:none :blend :add :mod :mul))
-              (member value '(0 1 2 4 8)))
+              (typep value '(integer 0 #x7ffffffe)))
     (error 'type-error :datum value
-           :expected-type '(or (member 0 1 2 4 8) (member :none :blend :add :mod :mul))))
+           :expected-type '(or (integer 0 #x7ffffffe) (member :none :blend :add :mod :mul))))
+  ;; Keep encoded custom modes per image, just like the texture/draw APIs.
+  ;; Backend support is checked by SDL when DRAW-IMAGE applies the mode.
   (setf (slot-value image 'blend-mode) value))
 
 (defun image-get-rect (image &rest anchors)

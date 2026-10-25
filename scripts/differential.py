@@ -23,7 +23,7 @@ CASE_NAMES = [
     "mask overlap area", "raw copy under zero alpha", "zero-radius circle",
     "channel blend effects", "premultiplied alpha", "rectangle fitting",
     "line clipping", "vector movement", "color conversions",
-    "surface layout queries", "mask painting", "Laplacian interior responses", "single-sprite groups",
+    "surface layout queries", "mask painting", "mask rectangle anchors", "Laplacian interior responses", "single-sprite groups",
     "named color palette", "color inputs", "per-color effects and updates",
     "rectangle scaling and mutation", "object collisions", "vector update and rotation",
     "captured audio completions",
@@ -41,6 +41,7 @@ CASE_NAMES = [
     "SDL2 renderer targets and controls", "SDL2 texture partial update",
     "SDL2 texture rotation origin", "SDL2 nested image atlas rectangles",
     "SDL2 image modulation pixels", "RLE colorkey alpha and post-blit lock state",
+    "custom SDL blend modes", "FreeType face information", "FreeType style flags",
 ]
 
 
@@ -126,6 +127,47 @@ def mask_painting():
     mask.to_surface(surface=target, setsurface=plane, dest=(1, 1),
                     setcolor=(90, 80, 70, 60), unsetcolor=None)
     return pixel_colors(target)
+
+
+def mask_rect_anchors():
+    """Rect anchors on odd and empty masks, including sequential assignments."""
+    odd = pygame.mask.Mask((5, 3))
+    return [list(odd.get_rect(center=pygame.Vector2(10, 5))),
+            list(odd.get_rect(topleft=[2, 4])),
+            list(odd.get_rect(right=10, bottom=9)),
+            list(odd.get_rect(x=1, left=7)),
+            list(pygame.mask.Mask((0, 0)).get_rect(center=(10, 5))),
+            list(pygame.mask.Mask((0, 3)).get_rect(midbottom=(5, 8)))]
+
+
+def custom_blend_modes():
+    """Canonical and custom factor/operation combinations from SDL 2.32."""
+    from pygame._sdl2.video import Renderer
+    modes = [((2, 1, 1), (2, 1, 1)),
+             ((5, 6, 1), (2, 6, 1)),
+             ((1, 2, 1), (1, 2, 1)),
+             ((3, 4, 2), (5, 6, 3)),
+             ((10, 9, 5), (7, 8, 4)),
+             ((1, 10, 2), (10, 1, 5))]
+    return [Renderer.compose_custom_blend_mode(color, alpha)
+            for color, alpha in modes]
+
+
+def freetype_face_information():
+    """Compare scalable outline metrics and one fixed-size BDF strike."""
+    import pygame.freetype as freetype
+    freetype.init()
+    outline = freetype.Font(str(ROOT / "assets/fonts/DejaVuSans.ttf"), 20)
+    bitmap = freetype.Font(str(ROOT / "tests/fixtures/tiny-mono.bdf"), 8)
+
+    def information(font, size):
+        strikes = [[point_size, height, width, round(x_ppem), round(y_ppem)]
+                   for point_size, height, width, x_ppem, y_ppem in font.get_sizes()]
+        return [int(font.scalable), int(font.fixed_width), font.fixed_sizes,
+                font.height, font.ascender, font.descender,
+                font.get_sized_glyph_height(size), strikes]
+
+    return [information(outline, 20), information(bitmap, 8)]
 
 
 def laplacian():
@@ -692,6 +734,7 @@ def reference():
         color_conversions(),
         surface_details(),
         mask_painting(),
+        mask_rect_anchors(),
         laplacian(),
         single_group(),
         named_palette(),
@@ -720,6 +763,10 @@ def reference():
         sdl2_renderer_targets_and_controls(), sdl2_texture_partial_update(),
         sdl2_texture_rotation_origin(), sdl2_image_nested_rects(),
         sdl2_image_modulation_pixels(), rle_colorkey_alpha_lock_state(),
+        custom_blend_modes(), freetype_face_information(),
+        [pygame.freetype.STYLE_NORMAL, pygame.freetype.STYLE_STRONG,
+         pygame.freetype.STYLE_OBLIQUE, pygame.freetype.STYLE_UNDERLINE,
+         pygame.freetype.STYLE_WIDE, pygame.freetype.STYLE_DEFAULT],
     ]
 
 

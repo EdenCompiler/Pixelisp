@@ -1,7 +1,7 @@
 ;;;; Emit a small JSON fixture for the optional pygame differential check.
 ;;;; This is test tooling; the library has no Python dependency.
 (load (merge-pathnames "bootstrap.lisp" *load-truename*))
-(ql:quickload "pixelisp" :silent t)
+(ql:quickload '("pixelisp" "pixelisp/freetype") :silent t)
 
 (defun fixture-rect-values (rect)
   (list (px.rect:x rect) (px.rect:y rect) (px.rect:width rect) (px.rect:height rect)))
@@ -88,6 +88,58 @@
         (px.mask:to-surface mask :surface target :set-surface plane :dest '(1 1)
                             :set-color '(90 80 70 60) :unset-color nil)
         (fixture-pixel-colors target)))))
+
+(defun fixture-mask-rect-anchors ()
+  ;; Match pygame 2.6.1 Mask.get_rect forwarding anchor keywords to Rect.
+  (let ((odd (px.mask:make-mask '(5 3))))
+    (flet ((values-of (rect)
+             (list (px.rect:x rect) (px.rect:y rect)
+                   (px.rect:width rect) (px.rect:height rect))))
+      (list (values-of (px.mask:get-rect odd :center #(10 5)))
+            (values-of (px.mask:get-rect odd :topleft '(2 4)))
+            (values-of (px.mask:get-rect odd :right 10 :bottom 9))
+            (values-of (px.mask:get-rect odd :x 1 :left 7))
+            (values-of (px.mask:get-rect (px.mask:make-mask '(0 0)) :center '(10 5)))
+            (values-of (px.mask:get-rect (px.mask:make-mask '(0 3)) :midbottom '(5 8)))))))
+
+(defun fixture-custom-blend-modes ()
+  ;; Factor and operation values here are SDL's stable public enum integers.
+  ;; Mix keywords and integers to cover both supported Lisp input forms.
+  (list (pixelisp.sdl2.video:compose-custom-blend-mode '(:one :zero :add)
+                                                       '(:one :zero :add))
+        (pixelisp.sdl2.video:compose-custom-blend-mode
+         '(:src-alpha :one-minus-src-alpha :add) '(:one :one-minus-src-alpha :add))
+        (pixelisp.sdl2.video:compose-custom-blend-mode #(1 2 1) #(1 2 1))
+        (pixelisp.sdl2.video:compose-custom-blend-mode
+         '(3 4 :subtract) '(5 6 :rev-subtract))
+        (pixelisp.sdl2.video:compose-custom-blend-mode
+         #(:one-minus-dst-alpha :dst-alpha :maximum)
+         #(:dst-color :one-minus-dst-color :minimum))
+        (pixelisp.sdl2.video:compose-custom-blend-mode '(1 10 2) '(10 1 5))))
+
+(defun fixture-freetype-face-information ()
+  (px.freetype:init)
+  (labels ((truth-value (value) (if value 1 0))
+           (face-info (font size)
+             (list (truth-value (px.freetype:scalable-p font))
+                   (truth-value (px.freetype:fixed-width-p font))
+                   (px.freetype:fixed-sizes font)
+                   (px.freetype:height font)
+                   (px.freetype:ascender font)
+                   (px.freetype:descender font)
+                   (px.freetype:get-sized-glyph-height font size)
+                   (mapcar (lambda (record)
+                             (list (first record) (second record) (third record)
+                                   (round (fourth record)) (round (fifth record))))
+                           (px.freetype:get-sizes font)))))
+    (px:with-resource
+        (outline (px.freetype:make-font
+                  (asdf:system-relative-pathname "pixelisp" "assets/fonts/DejaVuSans.ttf") 20))
+      (px:with-resource
+          (bitmap (px.freetype:make-font
+                   (asdf:system-relative-pathname "pixelisp/tests"
+                                                  "tests/fixtures/tiny-mono.bdf") 8))
+        (list (face-info outline 20) (face-info bitmap 8))))))
 
 (defun fixture-laplacian ()
   (px.surface:with-surface (source '(3 3) :alpha t)
@@ -549,6 +601,7 @@
              (fixture-color-conversions)
              (fixture-surface-details)
              (fixture-mask-painting)
+             (fixture-mask-rect-anchors)
              (fixture-laplacian)
              (fixture-single-group)
              (fixture-named-palette)
@@ -579,7 +632,12 @@
              (fixture-sdl2-texture-rotation-origin)
              (fixture-sdl2-image-nested-rects)
              (fixture-sdl2-image-modulation-pixels)
-             (fixture-rle-colorkey-alpha-lock-state))))))))
+             (fixture-rle-colorkey-alpha-lock-state)
+             (fixture-custom-blend-modes)
+             (fixture-freetype-face-information)
+             (list px.freetype:style-normal px.freetype:style-strong
+                   px.freetype:style-oblique px.freetype:style-underline
+                   px.freetype:style-wide px.freetype:style-default))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

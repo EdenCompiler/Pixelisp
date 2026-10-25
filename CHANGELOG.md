@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add direct FreeType strong, oblique, wide and underline styles, per-call
+  overrides, strength/underline placement controls, face capability queries,
+  bitmap-strike information and sized glyph height.
+- Add SDL custom blend composition for renderer, texture and atlas-image
+  drawing, plus renderer driver/capability information as ordinary plists.
+- Add mask rectangle anchors, preserving empty dimensions and caller order.
+  Extend pygame differential checks with mask placement, blend encoding,
+  font metadata and numeric style flags.
 - Add SDL renderer target scopes, viewport/logical scaling, readback, texture
   updates, blend controls, and rotation origins.
 - Add texture atlas Image views with nested crops and independent drawing

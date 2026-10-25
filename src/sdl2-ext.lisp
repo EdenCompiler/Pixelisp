@@ -54,6 +54,7 @@
            #:texture-size #:texture-alpha #:texture-color #:with-window #:with-renderer
            #:target-supported-p #:target #:with-render-target #:viewport #:get-viewport #:set-viewport
            #:logical-size #:renderer-scale #:draw-blend-mode #:draw-rect #:to-surface
+           #:compose-custom-blend-mode #:get-drivers #:get-renderer-info
            #:update-texture #:texture-blend-mode #:texture-get-rect
            #:window-id #:window-display-index #:window-resizable-p #:window-borderless-p
            #:window-opacity #:window-fullscreen-mode #:set-fullscreen #:set-windowed

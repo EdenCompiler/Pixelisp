@@ -174,6 +174,46 @@ factors, and blend keywords `:none`, `:blend`, `:add`, `:mod`, `:mul` or SDL
 blend-mode integers. These settings affect renderer operations and do not
 change the separate software display surface.
 
+`compose-custom-blend-mode` follows pygame 2.6.1's `Renderer.compose_custom_blend_mode`:
+pass a color triple and an alpha triple, each a list or vector in
+`(source-factor destination-factor operation)` order. Factors accept
+`:zero`, `:one`, `:src-color`, `:one-minus-src-color`, `:src-alpha`,
+`:one-minus-src-alpha`, `:dst-color`, `:one-minus-dst-color`, `:dst-alpha`,
+and `:one-minus-dst-alpha`; operations accept `:add`, `:subtract`,
+`:rev-subtract`, `:minimum`, and `:maximum`. The corresponding SDL enum
+integers are accepted too. The function returns the integer from SDL. SDL may
+canonicalize familiar combinations to its preset values such as `0` (`:none`)
+or `1` (`:blend`); other combinations return packed custom mode integers.
+Assign the result to `draw-blend-mode` or `texture-blend-mode`, or to an image's
+`image-blend-mode`. Renderer support depends on the backend; SDL reports an
+unsupported mode as `px:error` when a setter applies it.
+
+For example, this sets premultiplied-alpha “over” blending on an existing
+texture and draws it with an existing renderer. The texture's RGB channels
+must already be multiplied by its alpha:
+
+```lisp
+(let ((premultiplied-over
+        (px.sdl2.video:compose-custom-blend-mode
+         '(:one :one-minus-src-alpha :add)
+         '(:one :one-minus-src-alpha :add))))
+  (setf (px.sdl2.video:texture-blend-mode premultiplied-texture)
+        premultiplied-over)
+  (px.sdl2.video:draw-texture renderer premultiplied-texture
+                               :destination '(20 20 128 128)))
+```
+
+After the SDL video subsystem is initialized, `get-drivers` returns a list of
+property lists describing SDL's available 2D render drivers. Each plist
+contains `:name`, `:flags`, `:num-texture-formats`,
+`:texture-formats`, `:max-texture-width`, and `:max-texture-height`. Flags and
+pixel-format entries are the raw SDL integer values; a maximum dimension of
+zero means SDL does not report a limit. `get-renderer-info` returns the same
+fields for an existing renderer. These queries report capabilities without
+creating a renderer or texture. See the [pygame 2.6.1 tagged video source](https://github.com/pygame/pygame/blob/2.6.1/src_c/cython/pygame/_sdl2/video.pyx),
+[SDL_ComposeCustomBlendMode](https://wiki.libsdl.org/SDL2/SDL_ComposeCustomBlendMode),
+and [SDL_RendererInfo](https://wiki.libsdl.org/SDL2/SDL_RendererInfo).
+
 Target textures let a renderer draw into a texture and use that texture later.
 Check `target-supported-p` first; create the texture with `:access :target`,
 then bind it using `with-render-target`. The macro restores the prior target,
@@ -239,7 +279,8 @@ the same renderer, provided the parent region fits. The modifier accessors
 Origin and color getters return copies. Colors accept the same lists, vectors,
 and `px:color` values as other Pixelisp color arguments; `image-alpha` is an
 integer from 0 through 255. Blend mode accepts `:none`, `:blend`, `:add`,
-`:mod`, `:mul` or the corresponding SDL values 0, 1, 2, 4, and 8.
+`:mod`, `:mul`, their corresponding SDL values 0, 1, 2, 4, and 8, or an encoded
+integer returned by `compose-custom-blend-mode`.
 
 `draw-image` accepts an optional contained `:source` crop relative to the view.
 Its `:destination` can be a `(x y)` position, a rectangle that scales the image,

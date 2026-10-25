@@ -29,10 +29,10 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `_sdl2.touch` | `px.touch`, `px.sdl2.touch` | Device/finger enumeration and normalized touch events |
 | `time` | `px.time` | Clocks, frame caps, elapsed/raw time, FPS, delay, pump-delivered timers |
 | `math`, `Vector2`, `Vector3` | `px.math` | Vector arithmetic, indexed components and swizzles with validated writes, updates, length scaling, geometry, scalar/vector interpolation, decimal rounding, bounded movement, degree/radian rotations, scalar clamp and polar/spherical conversion |
-| `mask`, `Mask` | `px.mask` | Bit masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
+| `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
 | `sprite` | `px.sprite` | CLOS sprites, single/ordered/layered/dirty groups, membership/update, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
 | `font`, `sysfont` | `px.font`, `px.sysfont` | UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
-| `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, kerning, metrics, baseline placement, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
+| `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, kerning, face/strike metrics, baseline placement, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Sounds, channels, volume/panning, fades/queues, streamed music, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
@@ -45,7 +45,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `scrap` | `px.scrap` | UTF-8 clipboard and primary selection; advertises text-only capabilities |
 | `threads` | `px.threads` | Workers, multiple values, failure propagation, ordered bounded parallel map |
 | `fastevent` | `px.fastevent` | Operational facade over the modern event queue |
-| `_sdl2`, `_sdl2.sdl2`, `_sdl2.video` | `px.sdl2`, `px.sdl2.video` | Independent windows with identity, fullscreen/windowed requests, resize/border/opacity/grab/icon controls; renderer state, targets/readback, texture updates, atlas Image regions with tint/alpha/pivots and ownership |
+| `_sdl2`, `_sdl2.sdl2`, `_sdl2.video` | `px.sdl2`, `px.sdl2.video` | Independent windows with identity, fullscreen/windowed requests, resize/border/opacity/grab/icon controls; renderer driver/capability queries, custom blend composition, state, targets/readback, texture updates, atlas Image regions with tint/alpha/pivots and ownership |
 | `_sdl2.audio` | `px.sdl2.audio` | Raw queued PCM playback/capture devices, enumeration and ownership |
 | `_sdl2.mixer` | `px.sdl2.mixer` | Post-mix observation via a bounded native PCM ring, drained on the Lisp thread |
 | `examples` | `px.examples`, `pixelisp/examples` | Four playable games—Prism Breaker, Orbit Patrol, Crater Command, and Echo Grove—with a shared 900×620 runner, deterministic bounded runs, synthetic input, gameplay snapshots, and generated audio |
@@ -70,6 +70,12 @@ The exported Lisp symbols and module API guides describe the actual interface.
 - Drawing, antialiasing, alpha rounding, filtered transforms, and text layout
   can differ from pygame's exact pixels. The implementation favors readable
   CPU algorithms; there is no performance or bit-exact parity claim.
+- Direct FreeType strong/oblique/wide styling requires outline fonts; bitmap
+  fonts can still be rendered and underlined. Bitmap wide styling, vertical
+  layout, rotated text, two-axis font sizes, and pygame's layout cache are not
+  implemented. Face metrics use native font units or explicit pixel queries;
+  raw glyph metrics remain unstyled. Style rasterization and advance rounding
+  can differ from pygame.
 - Dirty-group redraws restore saved backgrounds and redraw every visible member
   in draw order to preserve overlap. They can report broader damage than
   pygame's optimized dirty rectangles; returned damage is clipped to the
@@ -94,8 +100,9 @@ The exported Lisp symbols and module API guides describe the actual interface.
   not clip. As in pygame 2.6.1's SDL upload path, the area selects the texture
   destination while source bytes begin at the source surface's top-left.
   SDL clips readback to the physical viewport; unread destination pixels are
-  preserved. These renderer APIs require the video thread and textures remain tied to
-  their creating renderer.
+  preserved. Custom blend factors/operations are composed by SDL; support is
+  checked when assigning a mode to a renderer or texture. These renderer APIs
+  require the video thread; textures remain tied to their creating renderer.
 - Atlas `Image` wrappers retain textures without allocating or freeing native
   storage. Crops must be nonempty and contained in their parent region. Image
   drawing restores the texture's previous tint, alpha and blend settings;
@@ -115,9 +122,11 @@ The exported Lisp symbols and module API guides describe the actual interface.
 
 The automated suite tests real native buffers with dummy audio/video, tiny
 pixel fixtures, direct FreeType/TTF rendering, image round-trips, samples/music,
+FreeType style overrides, bitmap-strike metadata and unsupported-style checks,
 window/renderer ownership, renderer target restoration and readback, partial
 and format-converting texture updates, texture origins/blend modes, atlas crops
-and modifier isolation, RLE pixel access and borrowing rules, virtual
+and modifier isolation, custom blend encoding and accelerated blending pixels,
+positioned masks, RLE pixel access and borrowing rules, virtual
 joysticks, worker behavior and lifetimes.
 Xvfb exercises X11 presentation, clipboard text, independent window grabs,
 window flags and fullscreen transitions.

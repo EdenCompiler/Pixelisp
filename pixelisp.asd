@@ -17,7 +17,7 @@
   :components ((:file "src/surface") (:file "src/runtime") (:file "src/graphics") (:file "src/mask-surface")
                (:file "src/arrays") (:file "src/surface-views") (:file "src/media") (:file "src/sndarray")
                (:file "src/devices") (:file "src/device-info") (:file "src/threads") (:file "src/sdl2-ext")
-               (:file "src/renderer-tools") (:file "src/texture-tools")
+               (:file "src/renderer-tools") (:file "src/texture-tools") (:file "src/blend-modes")
                (:file "src/window-tools") (:file "src/atlas")
                (:file "src/legacy") (:static-file "native/pixelisp-native.c")
                (:static-file "assets/fonts/DejaVuSans.ttf")
@@ -27,7 +27,8 @@
 
 (asdf:defsystem "pixelisp/freetype"
   :depends-on ("pixelisp" "cl-freetype2")
-  :components ((:file "src/freetype")))
+  :serial t
+  :components ((:file "src/freetype") (:file "src/freetype-info")))
 (asdf:defsystem "pixelisp/midi"
   :depends-on ("pixelisp") :components ((:file "src/midi")))
 (asdf:defsystem "pixelisp/camera"
@@ -56,14 +57,18 @@
                (:file "tests/math-extra") (:file "tests/vector-api") (:file "tests/vector-access") (:file "tests/value-updates")
                (:file "tests/arrays") (:file "tests/surface-views")
                (:file "tests/pixelarray-extra") (:file "tests/surface-batch")
-               (:file "tests/surface-effects") (:file "tests/surface-info") (:file "tests/surface-rle") (:file "tests/mask-surface")
+               (:file "tests/surface-effects") (:file "tests/surface-info") (:file "tests/surface-rle")
+               (:file "tests/mask-surface") (:file "tests/mask-rect")
                (:file "tests/runtime") (:file "tests/display-info") (:file "tests/display-controls")
                (:file "tests/event-controls") (:file "tests/key-repeat")
                (:file "tests/graphics") (:file "tests/rounded-rect")
                (:file "tests/sprite-extra") (:file "tests/sprite-repaint") (:file "tests/laplacian")
-               (:file "tests/media") (:file "tests/freetype-arrays") (:file "tests/image-memory") (:file "tests/font-script")
+               (:file "tests/media") (:file "tests/freetype-arrays")
+               (:file "tests/freetype-styles") (:file "tests/freetype-info")
+               (:static-file "tests/fixtures/tiny-mono.bdf")
+               (:file "tests/image-memory") (:file "tests/font-script")
                (:file "tests/audio-events") (:file "tests/devices") (:file "tests/device-info")
-               (:file "tests/renderer-tools") (:file "tests/texture-tools")
+               (:file "tests/renderer-tools") (:file "tests/texture-tools") (:file "tests/blend-modes")
                (:file "tests/window-tools") (:file "tests/atlas"))
   :perform (asdf:test-op (o c) (declare (ignore o c))
              (unless (uiop:symbol-call :fiveam :run! (find-symbol "PIXELISP" :pixelisp.tests))

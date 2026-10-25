@@ -97,6 +97,49 @@ baseline-relative bounds Rect; `render-raw` returns a packed grayscale mask and
 its `(width height)`. The packed vector is row-major (`x + y * width`). Pass
 `:invert t` to `render-raw` to return `255 - coverage` for every mask pixel.
 
+`style` is a settable bitmask: combine `style-strong` (1), `style-oblique` (2),
+`style-underline` (4), and `style-wide` (8) with `logior`. `style-normal` (0)
+clears all flags. The boolean properties `strong`, `oblique`, `underline`, and
+`wide` change individual bits. Assigning `style-default` (255) leaves the font's
+default unchanged. `get-rect`, `render`, `render-to`, `render-raw`, and
+`render-raw-to` accept `:style` to override that default for one call; the font
+itself is not changed. With `render` and `render-to`, supply the optional
+foreground and background arguments before keyword arguments.
+
+Strong, oblique, and wide operate on FreeType outlines before rasterization.
+They require an outline font and bypass any embedded bitmap strike; requests
+on bitmap-only fonts signal `px:unsupported-feature` before changing style.
+`strength` ranges from 0 through 1 and defaults to 1/36. Wide scales outlines
+and advances horizontally; strong expands the outline in both dimensions.
+Underline uses the font's native underline position and thickness, with a
+minimum one-pixel stroke. `underline-adjustment` ranges from -2 through 2 and
+defaults to 1: positive values scale the underline offset below the baseline,
+while negative values place the stroke above it using the ascender. Pixel
+rounding, glyph advances, and bounds retain Pixelisp's layout differences from
+pygame. `get-metrics` reports the original glyph metrics without these styles.
+
+```lisp
+(ql:quickload "pixelisp/freetype")
+(px:with-resource (font (px.freetype:make-font nil 28))
+  (setf (px.freetype:strong font) t)
+  ;; A single underlined prompt, preserving this font's strong default.
+  (px:with-resource
+      (label (px.freetype:render font "Your turn" '(245 220 130) nil
+                                :style px.freetype:style-underline))
+    (px.surface:blit screen label '(30 100))))
+```
+
+Read-only face information includes `scalable-p`, `fixed-width-p`, and
+`fixed-sizes` (the count of embedded bitmap strikes). `height`, `ascender`, and
+`descender` return unscaled font units, with descent normally negative; these
+fields may be zero for bitmap fonts. `get-sized-glyph-height` returns the
+pixel ascent-to-descent span including one baseline row, independently of
+styling. `get-sizes` returns fresh lists of
+`(point-size height width x-ppem y-ppem)` strike records, or NIL for an
+outline-only font. The first three values are integers and ppem values are
+fractional pixels. Bitmap sizes must match a supported strike when opening or
+rendering that font.
+
 Fonts expose `kerning`, `antialiased`, sized ascender/descender metrics, glyph
 metrics, and kerning queries. The `origin` property defaults to NIL and can be
 set with `(setf (px.freetype:origin font) t)`. There is no `:origin` constructor
@@ -117,6 +160,11 @@ integer element type that can represent every value from 0 through 255. A
 `(unsigned-byte 8)` plane, such as a surface alpha-channel view. Pixels whose
 original glyph coverage is zero are left untouched, including in inverted
 mode; for nonzero coverage, `:invert t` writes `255 - coverage`.
+
+The reference is [pygame 2.6.1 FreeType](https://github.com/pygame/pygame/blob/2.6.1/docs/reST/ref/freetype.rst),
+with native metric units described by [FreeType's face fields](https://freetype.org/freetype2/docs/reference/ft2-face_creation.html#ft_facerec).
+Vertical layout, text rotation, independent horizontal/vertical font sizes, and
+pygame's layout cache remain unimplemented in this direct renderer.
 
 ```lisp
 (let ((font (px.freetype:make-font nil 24))

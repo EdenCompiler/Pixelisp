@@ -83,6 +83,13 @@ the first mask's coordinates. `overlap-mask`, `draw`, and `erase` provide
 composable mask operations. `connected-components` treats diagonal neighbors
 as connected.
 
+`get-rect` returns a fresh rectangle with the mask's size. Like
+`px.surface:get-rect`, it accepts point anchors such as `:center #(100 80)` or
+`:top-left '(20 30)`, and scalar anchors such as `:right 200` or `:center-x 90`.
+Compact pygame spellings such as `:topleft` work too. Anchors apply in caller
+order; later assignments win. Empty mask dimensions remain zero, so placing
+an empty mask does not turn it into a nonempty collision area.
+
 ```lisp
 (let* ((mask (px.mask:from-surface image))
        (hit (px.mask:overlap mask obstacle-mask '(12 4))))
