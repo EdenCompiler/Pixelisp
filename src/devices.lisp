@@ -22,7 +22,7 @@
 (defpackage #:pixelisp.joystick
   (:nicknames #:px.joystick) (:use #:cl) (:shadow #:close)
   (:export #:init #:quit #:get-init #:get-count #:names #:joystick #:open-joystick
-           #:close #:name #:instance-id #:attached-p #:get-numaxes #:get-numbuttons
+           #:close #:name #:get-guid #:get-power-level #:instance-id #:attached-p #:get-numaxes #:get-numbuttons
            #:get-numhats #:get-numballs #:get-axis #:get-button #:get-hat #:get-ball
            #:rumble #:stop-rumble #:update #:with-joystick))
 (in-package #:pixelisp.joystick)
@@ -92,7 +92,8 @@
 (defpackage #:pixelisp.controller
   (:nicknames #:px.controller #:pixelisp.sdl2.controller #:px.sdl2.controller) (:use #:cl)
   (:shadow #:close)
-  (:export #:init #:quit #:get-init #:get-count #:controller-p #:controller #:open-controller
+  (:export #:init #:quit #:get-init #:get-count #:controller-p #:controller #:name-for-index
+           #:get-eventstate #:set-eventstate #:open-controller
            #:close #:name #:instance-id #:attached-p #:get-axis #:get-button #:rumble
            #:stop-rumble #:add-mapping #:mapping #:get-numtouchpads #:get-touchpad-finger
            #:axis-names #:button-names #:with-controller))

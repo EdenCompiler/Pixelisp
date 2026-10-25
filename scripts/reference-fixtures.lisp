@@ -257,7 +257,7 @@
           (fixture-rect-values (px.rect:update-rect rect '(9 10) '(11 12))))))
 
 (defun fixture-image-from-bytes ()
-  ;; Same encoded 81-byte 2x2 PNG used in examples/system-recipes.lisp.
+  ;; Self-contained encoded 81-byte 2x2 PNG fixture.
   (let ((png (make-array 81 :element-type '(unsigned-byte 8)
                          :initial-contents
                          '(137 80 78 71 13 10 26 10 0 0 0 13 73 72 68 82 0 0 0 2
@@ -267,6 +267,138 @@
     (px:with-resource (image (px.image:load-bytes png :namehint "icon.png"))
       (list (list (px.surface:width image) (px.surface:height image))
             (fixture-pixel-colors image)))))
+
+(defun fixture-screensaver-controls ()
+  (px:with-init (:video t)
+    (let ((initial (px.display:get-allow-screensaver)))
+      (unwind-protect
+           (loop for allow in '(nil t nil)
+                 collect (progn
+                           (px.display:set-allow-screensaver allow)
+                           (if (px.display:get-allow-screensaver) 1 0)))
+        (px.display:set-allow-screensaver initial)))))
+
+(defun fixture-layered-sprite-lookup ()
+  (let* ((sprites (list (px:make-sprite :layer 1)
+                        (px:make-sprite :layer -1)
+                        (px:make-sprite :layer 1)
+                        (px:make-sprite :layer 0)))
+         (group (apply #'px.sprite:make-layered-group sprites))
+         (indices '(0 1 2 3 -1 -2 -3 -4)))
+    (flet ((ids-at-indices ()
+             (mapcar (lambda (index)
+                       (position (px.sprite:get-sprite group index) sprites :test #'eq))
+                     indices)))
+      (let ((before (ids-at-indices)))
+        (px.sprite:change-layer group (third sprites) -1)
+        (list before (ids-at-indices))))))
+
+(defun fixture-layered-dirty-clip-repaint ()
+  (px.surface:with-surface (target '(5 2))
+    (px.surface:with-surface (background '(5 2))
+      (px.surface:with-surface (first-image '(2 1))
+        (px.surface:with-surface (second-image '(2 1))
+          (px.surface:fill target '(10 0 0))
+          (px.surface:fill background '(10 0 0))
+          (px.surface:fill first-image '(200 0 0))
+          (px.surface:fill second-image '(80 0 0))
+          (let* ((first (px.sprite:make-dirty-sprite :image first-image
+                                              :rect (px:make-rect 1 0 2 1) :layer 0))
+                 (second (px.sprite:make-dirty-sprite :image second-image
+                                               :rect (px:make-rect 2 0 2 1) :layer 1))
+                 (group (px.sprite:make-layered-dirty-group first second)))
+            (px.sprite:draw group target background)
+            (let ((result (list (fixture-pixel-colors target))))
+              ;; The sprites are clean here; repaint only the edited background pixel.
+              (px.surface:fill background '(40 0 0) '(0 1 1 1))
+              (px.sprite:repaint-rect group '(0 1 1 1))
+              (px.sprite:draw group target)
+              (setf result (append result (list (fixture-pixel-colors target))))
+              ;; The narrow clip limits repainting to one overlap pixel. Removing
+              ;; it forces the complete tiny surface to reflect the latest background.
+              (px.surface:fill background '(60 0 0) '(1 0 4 1))
+              (px.sprite:set-clip group '(2 0 1 1))
+              (px.sprite:repaint-rect group '(1 0 4 1))
+              (px.sprite:draw group target)
+              (setf result (append result
+                                   (list (let ((clip (px.sprite:get-clip group)))
+                                           (list (px.rect:x clip) (px.rect:y clip)
+                                                 (px.rect:width clip) (px.rect:height clip)))
+                                         (fixture-pixel-colors target))))
+              (px.sprite:set-clip group nil)
+              (px.sprite:repaint-rect group '(0 0 5 2))
+              (px.sprite:draw group target)
+              (append result (list (fixture-pixel-colors target))))))))))
+
+(defun fixture-vector-indexing ()
+  (let ((two (px:make-vector2 3 4)) (three (px:make-vector3 5 6 7)))
+    (list (mapcar (lambda (index) (px.math:component two index)) '(0 1 -1 -2))
+          (mapcar (lambda (index) (px.math:component three index)) '(0 1 2 -1 -2 -3))
+          (progn (setf (px.math:component two -1) 9) (px.math:components two))
+          (progn (setf (px.math:component three -3) 11) (px.math:components three))
+          (loop for index in '(3 -4)
+                collect (handler-case (progn (px.math:component three index) 0)
+                          (error () 1))))))
+
+(defun fixture-vector-swizzles ()
+  (let* ((two (px:make-vector2 3 4)) (three (px:make-vector3 5 6 7))
+         (reads (list (px.math:swizzle two "x") (px.math:swizzle two "yx")
+                      (px.math:swizzle two "xyx") (px.math:swizzle two "xy01")
+                      (px.math:swizzle three "zxy10"))))
+    (setf (px.math:swizzle two "xy") (px.math:swizzle two "yx")
+          (px.math:swizzle three "zx") #(11 12))
+    (list reads (px.math:components two) (px.math:components three)
+          (handler-case (progn (setf (px.math:swizzle three "xx") '(40 50)) 0) (error () 1))
+          (px.math:components three)
+          (loop for pattern in '("z" "" "01")
+                collect (handler-case (progn (px.math:swizzle two pattern) 0) (error () 1))))))
+
+(defun fixture-surface-buffer-views ()
+  (px.surface:with-surface (surface '(2 2) :alpha t)
+    (px.surface:fill surface '(10 20 30 40))
+    (let ((result
+            (px.buffer:with-view (buffer (px.surface:get-buffer surface))
+              (px.buffer:with-view (bytes (px.surface:get-view surface "0"))
+                (px.buffer:with-view (linear (px.surface:get-view surface "1"))
+                  (px.buffer:with-view (packed (px.surface:get-view surface "2"))
+                    (px.buffer:with-view (rgb (px.surface:get-view surface "3"))
+                      (px.buffer:with-view (green (px.surface:get-view surface "g"))
+                        (px.buffer:with-view (alpha (px.surface:get-view surface "A"))
+                          (setf (px.buffer:view-ref bytes 0) 99
+                                (px.buffer:view-ref green 1 1) 77
+                                (px.buffer:view-ref alpha 0 0) 160)
+                          (list (px.buffer:dimensions buffer) (px.buffer:dimensions bytes)
+                                (px.buffer:dimensions linear) (px.buffer:dimensions packed)
+                                (px.buffer:dimensions rgb) (px.buffer:strides rgb)
+                                (px.buffer:view-ref rgb 0 0 0) (px.buffer:view-ref green 1 1)
+                                (fixture-pixel-colors surface)
+                                (if (px.surface:locked-p surface) 1 0)))))))))))
+      (append result (list (if (px.surface:locked-p surface) 1 0))))))
+
+(defun fixture-padded-surface-views ()
+  (px.surface:with-surface (parent '(4 4) :alpha t)
+    (px.surface:fill parent '(0 0 0 0))
+    (px:with-resource (child (px.surface:subsurface parent '(1 0 2 2)))
+      (let ((errors (loop for kind in '("0" "1")
+                          collect (handler-case
+                                      (px.buffer:with-view (view (px.surface:get-view child kind)) 0)
+                                    (error () 1)))))
+        (px.buffer:with-view (buffer (px.surface:get-buffer child))
+          (px.buffer:with-view (packed (px.surface:get-view child))
+            (px.buffer:with-view (red (px.surface:get-view child "r"))
+              (setf (px.buffer:view-ref red 0 1) 88)
+              (list errors (px.buffer:dimensions buffer) (px.buffer:dimensions packed)
+                    (px.buffer:strides packed) (px:color-r (px.surface:get-at parent '(1 1)))))))))))
+
+(defun fixture-controller-event-switch ()
+  (px:with-init (:video nil)
+    (let ((previous (px.controller:get-eventstate)))
+      (unwind-protect
+           (append (loop for enabled in '(nil t nil)
+                         collect (progn (px.controller:set-eventstate enabled)
+                                        (if (px.controller:get-eventstate) 1 0)))
+                   (list (if (px.controller:name-for-index (+ 10 (px.controller:get-count))) 0 1)))
+        (px.controller:set-eventstate previous)))))
 
 (defun fixture-data ()
   (px.surface:with-surface (source '(2 2) :alpha t)
@@ -316,7 +448,13 @@
              (fixture-key-repeat-settings)
              (fixture-math-rounding)
              (fixture-rect-update-shapes)
-             (fixture-image-from-bytes))))))))
+             (fixture-image-from-bytes)
+             (fixture-screensaver-controls)
+             (fixture-layered-sprite-lookup)
+             (fixture-layered-dirty-clip-repaint)
+             (fixture-vector-indexing) (fixture-vector-swizzles)
+             (fixture-surface-buffer-views) (fixture-padded-surface-views)
+             (fixture-controller-event-switch))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

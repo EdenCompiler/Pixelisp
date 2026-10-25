@@ -16,7 +16,7 @@ The tested setup is Linux with SBCL and Quicklisp. On Debian/Ubuntu, the native
 development packages can be installed with:
 
 ```sh
-sudo apt install sbcl build-essential pkg-config libsdl2-dev libsdl2-image-dev \
+sudo apt install sbcl build-essential pkg-config libffi-dev libsdl2-dev libsdl2-image-dev \
   libsdl2-ttf-dev libsdl2-mixer-dev libfreetype-dev libportmidi0 libv4l-0
 ```
 
@@ -39,8 +39,8 @@ Available systems:
 | `pixelisp/midi` | PortMidi streams and MIDI utilities |
 | `pixelisp/camera` | Linux V4L2 capture and colorspace utilities |
 | `pixelisp/all` | All of the above; loading does not open devices |
-| `pixelisp/examples` | Playable game, interactive labs, and a catalog/CLI |
-| `pixelisp/examples/tests` | Bounded example runs and synthetic-input tests |
+| `pixelisp/examples` | Four playable mini-games and a shared runner/CLI |
+| `pixelisp/examples/tests` | Bounded game runs and synthetic-input tests |
 | `pixelisp/tests` | FiveAM tests, including optional hardware checks |
 
 Camera and post-mix capture build a small C adapter lazily in ASDF's output
@@ -74,53 +74,47 @@ as `:escape` or `:left`.
 ## Run the examples
 
 ```sh
-make demo
-# Or: sbcl --script scripts/play.lisp
-make examples       # List every example.
-make demo-sprites   # Single-player group and additive particles.
-make demo-masks     # Move silhouettes and inspect pixel collisions.
-make demo-images    # Compare color/grayscale/thresholded Laplacian edges.
-make demo-ui        # Color arithmetic, corner styles, event filters and grabs.
-make demo-pixels    # Weighted replacement, transposed views and keyboard repeat.
+make demo             # Start Prism Breaker, the default game.
+make examples         # List the four games.
+make play-breaker     # Prism Breaker.
+make play-orbit       # Orbit Patrol.
+make play-crater      # Crater Command.
+make play-echo        # Echo Grove.
 ```
 
-Star Collector uses arrows/WASD, rotating images, sprite groups, mask
-collisions, UTF-8 text, and a generated chime. Press Escape to exit. Resizing
-scales its fixed logical drawing surface to the window.
+The four games share a 900×620 canvas. Press Escape to quit, P to pause or
+resume, and R to restart the current game. Prism Breaker uses the mouse or
+Left/Right to move and Space to launch the ball. Orbit Patrol uses Left/Right
+or A/D to turn, Up/W to thrust, and Space to fire. Crater Command uses
+Left/Right to aim, Up/Down to set power, and Space to fire. Echo Grove plays a
+four-pad sequence to watch and listen to, then repeat with keys 1–4, the
+arrows, or the mouse. It has a six-round goal and three mistake lives; audio
+can be disabled while its visual cues remain available.
 
-The [example guide](docs/EXAMPLES.md) describes controls, ownership, and the
-pygame capabilities demonstrated by all sixteen examples. The shared launcher
-accepts bounded runs and can export generated surfaces:
+The [game guide](docs/EXAMPLES.md) explains each objective and the gameplay
+mechanics used to demonstrate surfaces, sprites, masks, vectors, audio, and
+input. The shared launcher accepts bounded, seeded runs and screenshots:
 
 ```sh
-sbcl --script scripts/example.lisp sprite-lab --frames 120
-sbcl --script scripts/example.lisp effects --output effects.png
-sbcl --script scripts/example.lisp palette --output palette.png
-sbcl --script scripts/example.lisp sound-events
-sbcl --script scripts/example.lisp ui-lab
-sbcl --script scripts/example.lisp rounded-ui --output ui.png
-sbcl --script scripts/example.lisp pixel-lab
-sbcl --script scripts/example.lisp pixel-match --output pixel-match.png
-sbcl --script scripts/example.lisp memory-image --output memory-image.png
-sbcl --script scripts/example.lisp display-info
+sbcl --script scripts/example.lisp prism-breaker --frames 120 --fps 60
+sbcl --script scripts/example.lisp orbit-patrol --no-audio --seed 7
+sbcl --script scripts/example.lisp crater-command --frames 120 --seed 7
+sbcl --script scripts/example.lisp echo-grove --screenshot echo.png
 ```
 
 For a bounded headless smoke test:
 
 ```sh
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy sbcl --script scripts/play.lisp 10
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+  sbcl --script scripts/example.lisp prism-breaker --frames 10 --no-audio
 ```
 
-From the REPL:
+From the REPL, list and run games through the shared API:
 
 ```lisp
 (ql:quickload "pixelisp/examples")
-(px.examples:play :audio nil) ; Run without opening an audio device.
-(px.examples:mask-demo)      ; Returns an overlap coordinate and area.
-(px:with-resource (image (px.examples:pixel-demo))
-  (px.image:save image #p"gradient.png"))
-(px:with-resource (image (px.examples:effects-demo))
-  (px.image:save image #p"effects.png")) ; Alpha, additive, tinted, premultiplied.
+(px.examples:list-examples)
+(px.examples:run-example "prism-breaker" :frames 120 :audio nil :seed 7)
 ```
 
 ## Resource and thread rules
@@ -152,7 +146,7 @@ make test-examples # Bounded examples with generated mouse/key events.
 
 After loading dependencies, `(asdf:test-system "pixelisp")` runs the same suite.
 The library does not depend on Python. With pygame 2.6.1 installed,
-`python3 scripts/differential.py` runs thirty-six selected reference fixtures,
+`python3 scripts/differential.py` runs thirty-nine selected reference fixtures,
 including every bundled named color. It needs pygame 2.6.1 only as test tooling.
 
 - [Surface, event, timing, and array APIs](docs/API-core.md)
@@ -163,5 +157,5 @@ including every bundled named color. It needs pygame 2.6.1 only as test tooling.
 - [Contributor guide and code map](CONTRIBUTING.md)
 
 Pixelisp's code is MIT licensed. The bundled DejaVu Sans font retains its own
-license in `examples/assets/LICENSE-DejaVu.txt`. Native dependencies retain
+license in `assets/fonts/LICENSE-DejaVu.txt`. Native dependencies retain
 their respective licenses.

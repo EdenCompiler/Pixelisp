@@ -247,6 +247,14 @@ driver when available. These queries require initialized video and do not create
 a window; call them on the video subsystem's initializing thread. Display-index
 queries default to display zero.
 
+`px.display:iconify` requests minimization of the current window and returns
+true after issuing SDL's request; it cannot report whether the window manager
+has completed minimization. `get-allow-screensaver` reads SDL's current
+screensaver setting, and `set-allow-screensaver` takes a boolean to allow or
+inhibit it and returns that value. These operations require initialized video
+and the video thread. Restore the prior screensaver setting when an application
+temporarily changes it.
+
 `px.event:get` pumps input and returns queued events. `:types` filters events
 without consuming other types; `:limit` bounds the result. `poll` returns one
 event or NIL; `wait` accepts an optional millisecond timeout. `clear`, `peek`,
@@ -307,8 +315,7 @@ the video thread. Text composition stays in the separate UTF-8 text-input API.
 They require initialized video, an existing display, and the video thread.
 Getters report SDL's observed state, which depends on focus and backend
 support. Keyboard grab signals `unsupported-feature` if the installed SDL
-lacks the required API. Closing the window releases its grabs. The UI lab
-starts with grabs off and lets you toggle them explicitly.
+lacks the required API. Closing the window releases its grabs.
 
 ## Time
 
@@ -322,6 +329,35 @@ loops repeats; zero interval cancels. Timers deliver during pumping and
 coalesce missed intervals instead of flooding the queue after a long pause.
 
 ## Pixel arrays and live views
+
+`px.surface:get-buffer` exposes native pixel bytes and row padding as a locked
+`buffer-view`. `px.surface:get-view` selects a typed view using a one-character
+string or character (letters are case insensitive):
+
+| Kind | Dimensions | Elements |
+| --- | --- | --- |
+| `"0"` | `(byte-count)` | Contiguous bytes; rejects padded rows |
+| `"1"` | `(width * height)` | Contiguous packed pixels; rejects padded rows |
+| `"2"` (default) | `(width height)` | Packed pixels with native row pitch |
+| `"3"` | `(width height 3)` | RGB bytes, including negative BGR channel strides |
+| `"r"`, `"g"`, `"b"`, `"a"` | `(width height)` | One byte per selected channel |
+
+Packed element types follow the native pixel storage width. RGB views support
+preserved 24- and 32-bit formats with adjacent RGB/BGR bytes; alpha requires a
+32-bit per-pixel alpha surface. Normal public surface constructors use 32 bits.
+Missing channels signal `px:unsupported-feature` without leaving a lock behind.
+
+```lisp
+(px.buffer:with-view (alpha (px.surface:get-view image "a"))
+  (setf (px.buffer:view-ref alpha 10 20) 0)) ; cut a transparent pixel
+```
+
+Views lock immediately and retain their surface and all surface parents until
+closed. Drawing clips do not restrict raw writes. For a cropped subsurface,
+`get-buffer` bounds its bytes by the root allocation, so final-row padding may
+be shorter than pygame's nominal `pitch * height` buffer. Inter-row gaps can
+include neighboring parent pixels. Use a channel or packed view when edits
+should stay inside the child's logical rectangle.
 
 `px.surfarray:array2d`, `array3d`, `array-alpha`, and channel variants copy pixels
 into specialized CL arrays. The array axes are **X, Y, channel**. `make-surface`

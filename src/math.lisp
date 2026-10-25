@@ -10,7 +10,7 @@
   (:use #:cl)
   (:shadow #:length)
   (:export #:vector2 #:vector3 #:make-vector2 #:make-vector3 #:vector2-p #:vector3-p
-           #:x #:y #:z #:components #:add #:subtract #:multiply #:divide #:dot #:cross
+           #:x #:y #:z #:components #:component #:swizzle #:add #:subtract #:multiply #:divide #:dot #:cross
            #:length #:length-squared #:normalize #:normalize-ip #:is-normalized-p
            #:distance-to #:distance-squared-to #:lerp #:slerp #:rotate #:rotate-ip
            #:scale-to-length #:update-vector #:rotate-rad #:rotate-rad-ip

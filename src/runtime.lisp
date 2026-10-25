@@ -6,7 +6,8 @@
   (:export #:init #:quit #:get-init #:set-mode #:get-surface #:get-window
            #:flip #:update #:set-caption #:get-caption #:get-window-size
            #:get-active #:toggle-fullscreen #:set-icon #:get-desktop-sizes
-           #:get-driver #:get-num-displays #:list-modes #:get-display-info))
+           #:get-driver #:get-num-displays #:list-modes #:get-display-info
+           #:iconify #:get-allow-screensaver #:set-allow-screensaver))
 (defpackage #:pixelisp.event
   (:use #:cl) (:nicknames #:px.event) (:shadow #:get #:type #:wait)
   (:export #:event #:make-event #:type #:attributes #:attribute #:post #:get
@@ -110,6 +111,13 @@ Loading an ASDF system never initializes SDL or opens devices."
 (cffi:defcfun ("SDL_GetDesktopDisplayMode" %desktop-display-mode) :int
   (display :int) (output :pointer))
 (cffi:defcfun ("SDL_GetCurrentVideoDriver" %current-video-driver) :string)
+;; These are SDL2's public display controls. SDL_MinimizeWindow has no return
+;; value; ICONIFY therefore reports that SDL accepted the request after a live
+;; window was supplied, not that the window manager completed minimization.
+(cffi:defcfun ("SDL_MinimizeWindow" %minimize-window) :void (window :pointer))
+(cffi:defcfun ("SDL_IsScreenSaverEnabled" %is-screensaver-enabled) :int)
+(cffi:defcfun ("SDL_EnableScreenSaver" %enable-screensaver) :void)
+(cffi:defcfun ("SDL_DisableScreenSaver" %disable-screensaver) :void)
 (defun init () (pixelisp:init :video t))
 (defun get-init () (and pixelisp.internal:*initialized* (not (null pixelisp.internal:*video-thread*))))
 (defun quit ()
@@ -144,6 +152,23 @@ SET-MODE disposes the previous display surface. Offscreen assets are retained."
   (%set-icon (pixelisp.internal:%ptr (get-window))
              (pixelisp.internal:%ptr (pixelisp.internal:surface-handle surface))) surface)
 (defun get-active () (not (null *window*)))
+(defun iconify ()
+  "Request minimization of the current window and return true after issuing it.
+SDL's minimize call is void, so this does not report whether the window manager
+has completed the request."
+  (pixelisp.internal::check-video-ready 'iconify)
+  (%minimize-window (pixelisp.internal:%ptr (get-window)))
+  t)
+(defun get-allow-screensaver ()
+  "Return whether SDL currently allows the system screensaver to run."
+  (pixelisp.internal::check-video-ready 'get-allow-screensaver)
+  (plusp (%is-screensaver-enabled)))
+(defun set-allow-screensaver (allow)
+  "Allow or inhibit the system screensaver and return ALLOW."
+  (pixelisp.internal::check-video-ready 'set-allow-screensaver)
+  (check-type allow boolean)
+  (if allow (%enable-screensaver) (%disable-screensaver))
+  allow)
 (defun toggle-fullscreen ()
   (let* ((window (get-window)) (flags (sdl2:get-window-flags window))
          (fullscreen (member :fullscreen flags)))

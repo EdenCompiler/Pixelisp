@@ -34,6 +34,28 @@ controller mapping, where axes and buttons can also be named keywords such as
 `:left-x` and `:a`. Joystick enumeration initializes SDL's joystick subsystem
 when needed. Call `quit` when the subsystem is no longer needed.
 
+`px.joystick:get-guid` returns an open device's 32-character lowercase hardware
+GUID, useful for saving bindings across reconnects. `get-power-level` returns
+`:unknown`, `:empty`, `:low`, `:medium`, `:full`, or `:wired`; reported battery
+information depends on the device and SDL driver. Both reject disposed devices.
+
+`px.controller:name-for-index` returns the name for a nonnegative enumeration
+index, or NIL if no mapped controller exists at that index. This index can
+change after hotplugging; use `instance-id` to identify an open device in events.
+`get-eventstate` and `set-eventstate` query or toggle native controller events:
+
+```lisp
+(let ((previous (px.controller:get-eventstate)))
+  (unwind-protect
+       (px.controller:set-eventstate nil)
+    (px.controller:set-eventstate previous)))
+```
+
+These module queries initialize the controller subsystem lazily. The switch
+leaves joystick events enabled independently and does not filter Lisp-posted
+events. The test suite verifies identity queries and the switch with SDL virtual
+devices; it does not verify a physical device's battery reporting.
+
 ## Text clipboard
 
 The SDL scrap adapter currently handles UTF-8 text and reports that limit

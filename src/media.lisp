@@ -8,6 +8,7 @@
   (:export #:init #:quit #:get-init #:font #:make-font #:sys-font #:sysfont
            #:get-fonts #:match-font #:get-default-font #:render #:size #:metrics
            #:get-height #:get-linesize #:get-ascent #:get-descent
+           #:set-script
            #:get-bold #:set-bold #:get-italic #:set-italic #:get-underline
            #:set-underline #:get-strikethrough #:set-strikethrough #:close
            #:get-sdl-ttf-version))
@@ -219,6 +220,10 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
 (cffi:defcfun ("TTF_GlyphMetrics32" %glyph-metrics) :int
   (font :pointer) (character :uint32) (minx :pointer) (maxx :pointer)
   (miny :pointer) (maxy :pointer) (advance :pointer))
+;; Added in SDL_ttf 2.20.0. Resolve at call time so older SDL_ttf libraries
+;; can still load Pixelisp and report this optional feature as unavailable.
+(defun %font-script-function ()
+  (ignore-errors (cffi:foreign-symbol-pointer "TTF_SetFontScriptName")))
 (defun init () (unless (get-init) (sdl2-ttf:init)) t)
 (defun get-init () (plusp (sdl2-ttf:was-init)))
 (defun quit ()
@@ -242,7 +247,7 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
 (defun get-default-font ()
   "Return the bundled DejaVu Sans font; fall back to system sans if unavailable."
   (let ((bundled (ignore-errors
-                   (asdf:system-relative-pathname "pixelisp" "examples/assets/DejaVuSans.ttf"))))
+                   (asdf:system-relative-pathname "pixelisp" "assets/fonts/DejaVuSans.ttf"))))
     (or (and bundled (probe-file bundled) (namestring bundled))
         (match-font "sans")
         (error 'pixelisp:dependency-error :operation 'get-default-font
@@ -271,6 +276,39 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
     (set-bold font bold) (set-italic font italic) font))
 (setf (fdefinition 'sysfont) #'sys-font)
 (defun %ptr (font) (pixelisp.internal:ensure-live font) (pixelisp.internal:%ptr (pixelisp.internal:handle font)))
+(defun %valid-script-name-p (script)
+  (and (stringp script) (= (length script) 4)
+       (every (lambda (character)
+                (or (<= (char-code #\A) (char-code character) (char-code #\Z))
+                    (<= (char-code #\a) (char-code character) (char-code #\z))))
+              script)))
+(defun set-script (font script)
+  "Set FONT's four-letter ISO 15924 script tag for HarfBuzz text shaping.
+
+This is a per-font setting and requires SDL_ttf 2.20.0 or newer compiled with
+HarfBuzz support. UTF-8 rendering, style controls and metric queries remain
+available after script selection. Return SCRIPT on success."
+  ;; Validate before resolving or calling the native function so malformed
+  ;; tags never mutate native font state.
+  (unless (%valid-script-name-p script)
+    (if (stringp script)
+        (error 'pixelisp:error :operation 'set-script
+               :message "Script must be exactly four ASCII letters (an ISO 15924 tag).")
+        (error 'type-error :datum script :expected-type 'string)))
+  (let ((font-pointer (%ptr font))
+        (function (%font-script-function)))
+    (when (or (null function) (cffi:null-pointer-p function))
+      (error 'pixelisp:unsupported-feature :operation 'set-script
+             :message "The loaded SDL_ttf library does not provide TTF_SetFontScriptName (SDL_ttf 2.20.0 or newer is required)."))
+    (unless (zerop (cffi:foreign-funcall-pointer function ()
+                    :pointer font-pointer :string script :int))
+      ;; SDL_ttf also returns -1 when built without HarfBuzz support.
+      (let ((native-message (pixelisp.image::%sdl-error)))
+        (error 'pixelisp:error :operation 'set-script
+               :message (if (and native-message (plusp (length native-message)))
+                            native-message
+                            "TTF_SetFontScriptName returned -1; this SDL_ttf build may lack HarfBuzz support."))))
+    script))
 (defmethod pixelisp.internal:dispose ((font font))
   (unless (pixelisp.internal:resource-disposed-p font)
     (sdl2-ttf:close-font (pixelisp.internal:handle font))))

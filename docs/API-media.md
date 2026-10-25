@@ -40,6 +40,16 @@ dimensions and channel order; it does not decode a PNG/JPEG file.
 
 Use `size` to measure UTF-8 text, `metrics` to inspect per-character glyph bounds and advance, and `render` to produce a surface. `render` takes an antialias flag and foreground color; an optional background color selects shaded rendering. Empty text returns a transparent surface. Font style accessors include `get-bold`/`set-bold`, `get-italic`/`set-italic`, `get-underline`/`set-underline`, and `get-strikethrough`/`set-strikethrough`. `get-height`, `get-linesize`, `get-ascent`, and `get-descent` expose font metrics.
 
+`px.font:set-script` sets a four-ASCII-letter ISO 15924 script tag on one font
+and returns the tag on success. For example, `"Latn"`, `"Grek"`, and `"Cyrl"`
+select Latin, Greek, and Cyrillic shaping. This setting selects script rules
+for SDL_ttf's text shaping; it does not set text direction or provide paragraph
+layout. Text remains an ordinary Unicode string encoded as UTF-8, and the
+existing rendering, style, and metric APIs continue to operate on the font.
+The per-font native entry point requires SDL_ttf 2.20.0 or newer compiled with
+HarfBuzz support. A missing native symbol signals `px:unsupported-feature`;
+a native call failure signals `px:error`.
+
 Fonts are native resources: use `px:dispose` or `px.font:close`, or place them in `px:with-resource`. After disposal, later use signals `px:disposed-resource`. `px.font:quit` disposes open fonts before quitting SDL_ttf. The optional `px.ftfont` facade offers the familiar SDL_ttf-style constructor and renderer backed by the direct FreeType implementation.
 
 ## Mixer and music
@@ -79,9 +89,6 @@ if notification is subsequently disabled. Native audio threads never call
 application Lisp. Keep pumping so queues advance and events are delivered.
 Channel settings reset when the mixer is reopened; music's module-wide event
 type persists across shutdown. Shutdown discards undelivered records.
-
-`px.examples:audio-events-demo` plays two queued generated chimes and consumes
-their completion events in a bounded loop; the CLI name is `sound-events`.
 
 ## Direct FreeType
 

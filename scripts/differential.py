@@ -33,6 +33,11 @@ CASE_NAMES = [
     "scalar lerp and vector rounding",
     "rectangle update shapes",
     "image load from bytes",
+    "screensaver controls",
+    "layered sprite lookup",
+    "layered dirty clip and repaint",
+    "vector component indexing", "vector swizzles", "surface buffer views",
+    "padded surface views", "controller event switch",
 ]
 
 
@@ -313,7 +318,7 @@ def rect_update_shapes():
 
 
 def image_from_bytes():
-    # Embedded 2x2 PNG from examples/system-recipes.lisp.
+    # Self-contained 2x2 PNG fixture; no example files are required.
     png = bytes([
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2,
         0, 0, 0, 2, 8, 6, 0, 0, 0, 114, 182, 13, 36, 0, 0, 0, 24, 73, 68, 65, 84,
@@ -323,6 +328,189 @@ def image_from_bytes():
     ])
     image = pygame.image.load(BytesIO(png), "icon.png")
     return [list(image.get_size()), pixel_colors(image)]
+
+
+def screensaver_controls():
+    """Compare explicit allow/inhibit states, then restore the host setting."""
+    pygame.display.init()
+    original = pygame.display.get_allow_screensaver()
+    try:
+        states = []
+        for allow in (False, True, False):
+            pygame.display.set_allow_screensaver(allow)
+            states.append(int(pygame.display.get_allow_screensaver()))
+        return states
+    finally:
+        pygame.display.set_allow_screensaver(original)
+        pygame.display.quit()
+
+
+def layered_sprite_lookup():
+    """Return stable sprite IDs at positive and negative draw-order indices."""
+    group = pygame.sprite.LayeredUpdates()
+
+    class IdentifiedSprite(pygame.sprite.Sprite):
+        def __init__(self, sprite_id):
+            super().__init__()
+            self.sprite_id = sprite_id
+
+    sprites = [IdentifiedSprite(index) for index in range(4)]
+    for sprite, layer in zip(sprites, (1, -1, 1, 0)):
+        group.add(sprite, layer=layer)
+    indices = (0, 1, 2, 3, -1, -2, -3, -4)
+
+    def ids_at_indices():
+        return [group.get_sprite(index).sprite_id for index in indices]
+
+    before = ids_at_indices()
+    group.change_layer(sprites[2], -1)
+    return [before, ids_at_indices()]
+
+
+def layered_dirty_clip_repaint():
+    """Compare pixels after background repaint and clipped/full redraws."""
+    # Pygame uses the display bounds when LayeredDirty.set_clip(None) resets
+    # its clip, so make the dummy display match these tiny test surfaces.
+    pygame.display.set_mode((5, 2))
+    target = pygame.Surface((5, 2))
+    background = pygame.Surface((5, 2))
+    target.fill((10, 0, 0))
+    background.fill((10, 0, 0))
+
+    first_image = pygame.Surface((2, 1))
+    first_image.fill((200, 0, 0))
+    second_image = pygame.Surface((2, 1))
+    second_image.fill((80, 0, 0))
+
+    first = pygame.sprite.DirtySprite()
+    first.image, first.rect = first_image, first_image.get_rect(topleft=(1, 0))
+    second = pygame.sprite.DirtySprite()
+    second.image, second.rect = second_image, second_image.get_rect(topleft=(2, 0))
+    group = pygame.sprite.LayeredDirty(first, second)
+    group.change_layer(first, 0)
+    group.change_layer(second, 1)
+    group.clear(target, background)
+    group.draw(target)
+    result = [pixel_colors(target)]
+
+    # The sprites are clean here; repaint only the edited background pixel.
+    background.fill((40, 0, 0), (0, 1, 1, 1))
+    group.repaint_rect(pygame.Rect(0, 1, 1, 1))
+    group.draw(target)
+    result.append(pixel_colors(target))
+
+    # A narrow clip limits the repaint to one overlap pixel. Resetting the
+    # clip forces the full tiny surface to reflect the latest background.
+    background.fill((60, 0, 0), (1, 0, 4, 1))
+    group.set_clip(pygame.Rect(2, 0, 1, 1))
+    group.repaint_rect(pygame.Rect(1, 0, 4, 1))
+    group.draw(target)
+    result.extend([list(group.get_clip()), pixel_colors(target)])
+    group.set_clip(None)
+    group.repaint_rect(pygame.Rect(0, 0, 5, 2))
+    group.draw(target)
+    result.append(pixel_colors(target))
+    pygame.display.quit()
+    return result
+
+
+def vector_indexing():
+    two, three = pygame.Vector2(3, 4), pygame.Vector3(5, 6, 7)
+    reads = [[int(two[i]) for i in (0, 1, -1, -2)],
+             [int(three[i]) for i in (0, 1, 2, -1, -2, -3)]]
+    two[-1], three[-3] = 9, 11
+    errors = []
+    for index in (3, -4):
+        try:
+            three[index]
+            errors.append(0)
+        except IndexError:
+            errors.append(1)
+    return reads + [list(two), list(three), errors]
+
+
+def vector_swizzles():
+    two, three = pygame.Vector2(3, 4), pygame.Vector3(5, 6, 7)
+    reads = [two.x, list(two.yx), list(two.xyx), list(two.xy01), list(three.zxy10)]
+    two.xy, three.zx = two.yx, (11, 12)
+    after = [list(two), list(three)]
+    duplicate = 0
+    try:
+        three.xx = (40, 50)
+    except AttributeError:
+        duplicate = 1
+    errors = []
+    for pattern in ('z', '', '01'):
+        try:
+            getattr(two, pattern)
+            errors.append(0)
+        except AttributeError:
+            errors.append(1)
+    return [reads] + after + [duplicate, list(three), errors]
+
+
+def rgba_surface(size):
+    # Explicit masks match Pixelisp's public native layout for raw-byte checks.
+    return pygame.Surface(size, pygame.SRCALPHA, 32,
+                          (0xff, 0xff00, 0xff0000, 0xff000000))
+
+
+def surface_buffer_views():
+    surface = rgba_surface((2, 2))
+    surface.fill((10, 20, 30, 40))
+    views = [memoryview(surface.get_buffer())]
+    views += [memoryview(surface.get_view(kind)) for kind in ('0', '1', '2', '3', 'g', 'A')]
+    buffer, raw, linear, packed, rgb, green, alpha = views
+    try:
+        raw[0], green[1, 1], alpha[0, 0] = 99, 77, 160
+        result = [list(buffer.shape), list(raw.shape), list(linear.shape),
+                  list(packed.shape), list(rgb.shape), list(rgb.strides),
+                  rgb[0, 0, 0], green[1, 1],
+                  [list(surface.get_at((x, y))) for y in range(2) for x in range(2)],
+                  int(surface.get_locked())]
+    finally:
+        for view in reversed(views):
+            view.release()
+    return result + [int(surface.get_locked())]
+
+
+def padded_surface_views():
+    parent = rgba_surface((4, 4))
+    parent.fill((0, 0, 0, 0))
+    child = parent.subsurface((1, 0, 2, 2))
+    errors = []
+    for kind in ('0', '1'):
+        try:
+            view = memoryview(child.get_view(kind))
+            view.release()
+            errors.append(0)
+        except ValueError:
+            errors.append(1)
+    views = [memoryview(child.get_buffer()), memoryview(child.get_view('2')),
+             memoryview(child.get_view('r'))]
+    buffer, packed, red = views
+    try:
+        red[0, 1] = 88
+        return [errors, list(buffer.shape), list(packed.shape), list(packed.strides),
+                parent.get_at((1, 1)).r]
+    finally:
+        for view in reversed(views):
+            view.release()
+
+
+def controller_event_switch():
+    from pygame._sdl2 import controller
+    controller.init()
+    previous = controller.get_eventstate()
+    try:
+        states = []
+        for enabled in (False, True, False):
+            controller.set_eventstate(enabled)
+            states.append(int(controller.get_eventstate()))
+        return states + [int(controller.name_forindex(controller.get_count() + 10) is None)]
+    finally:
+        controller.set_eventstate(previous)
+        controller.quit()
 
 
 def reference():
@@ -379,6 +567,11 @@ def reference():
         math_rounding(),
         rect_update_shapes(),
         image_from_bytes(),
+        screensaver_controls(),
+        layered_sprite_lookup(),
+        layered_dirty_clip_repaint(),
+        vector_indexing(), vector_swizzles(), surface_buffer_views(),
+        padded_surface_views(), controller_event_switch(),
     ]
 
 

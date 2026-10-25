@@ -1,0 +1,57 @@
+(in-package #:pixelisp.examples.tests)
+(in-suite examples)
+
+(defun %echo-wait-for-input (state session)
+  ;; Six notes at most: a bounded simulation protects against a stuck cue state.
+  (loop repeat 200 until (eq :input (px.examples::%echo-state-phase state))
+        do (px.examples::%echo-step state 0.05d0 session))
+  (eq :input (px.examples::%echo-state-phase state)))
+
+(test echo-grove-listen-repeat-and-finite-victory
+  (let* ((session (px.examples::make-game-session :seed 17))
+         (state (px.examples::%echo-new-state session)))
+    ;; Premature input cannot skip the listening phase or earn points.
+    (px.examples::%echo-press state session 0)
+    (is (= 0 (px.examples::%echo-state-score state)))
+    (dotimes (round 6)
+      (is (%echo-wait-for-input state session))
+      (is (= (1+ round) (length (px.examples::%echo-state-pattern state))))
+      (dolist (pad (copy-list (px.examples::%echo-state-pattern state)))
+        (px.examples::%echo-press state session pad)))
+    (is (eq :won (px.examples::%echo-state-status state)))
+    (is (= 3 (px.examples::%echo-state-lives state)))
+    (is (= 2625 (px.examples::%echo-state-score state)))))
+
+(test echo-grove-mistakes-timeout-and-replay
+  (let* ((session (px.examples::make-game-session :seed 7))
+         (state (px.examples::%echo-new-state session))
+         (pattern (copy-list (px.examples::%echo-state-pattern state))))
+    (is (%echo-wait-for-input state session))
+    (px.examples::%echo-press state session (mod (1+ (first pattern)) 4))
+    (is (= 2 (px.examples::%echo-state-lives state)))
+    (is (equal pattern (px.examples::%echo-state-pattern state)))
+    (is (%echo-wait-for-input state session))
+    (px.examples::%echo-step state 9d0 session)
+    (is (= 1 (px.examples::%echo-state-lives state)))
+    (is (%echo-wait-for-input state session))
+    (px.examples::%echo-press state session (mod (1+ (first pattern)) 4))
+    (is (eq :lost (px.examples::%echo-state-status state)))
+    (let ((fresh (px.examples::%echo-new-state (px.examples::make-game-session :seed 7))))
+      (is (equal pattern (px.examples::%echo-state-pattern fresh)))
+      (is (= 3 (px.examples::%echo-state-lives fresh))))))
+
+(test echo-grove-mouse-keyboard-and-snapshot-ownership
+  (let* ((session (px.examples::make-game-session))
+         (state (px.examples::%echo-new-state session)))
+    (setf (px.examples::%echo-state-pattern state) '(0 1)
+          (px.examples::%echo-state-round state) 2
+          (px.examples::%echo-state-phase state) :input)
+    (px.examples::%echo-event state (px.event:make-event :key-down :key :1 :repeat t) session)
+    (is (= 0 (px.examples::%echo-state-position state)))
+    (px.examples::%echo-event state (px.event:make-event :key-down :key :up) session)
+    (is (= 1 (px.examples::%echo-state-position state)))
+    (px.examples::%echo-event state (px.event:make-event :mouse-button-down :button 1 :pos '(500 200)) session)
+    (is (= 3 (px.examples::%echo-state-round state)))
+    (let ((snapshot (px.examples::%echo-snapshot state)))
+      (setf (car (getf snapshot :pattern)) 99)
+      (is (= 0 (first (px.examples::%echo-state-pattern state)))))))

@@ -1,4 +1,4 @@
-.PHONY: test test-x11 test-examples examples demo demo-sprites demo-masks demo-images demo-ui demo-pixels
+.PHONY: test test-x11 test-examples examples demo play-breaker play-orbit play-crater play-echo
 
 test:
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy sbcl --no-userinit --script scripts/test.lisp
@@ -12,20 +12,16 @@ test-examples:
 examples:
 	sbcl --no-userinit --script scripts/example.lisp --list
 
-demo:
-	sbcl --no-userinit --script scripts/play.lisp
+demo: play-breaker
 
-demo-sprites:
-	sbcl --no-userinit --script scripts/example.lisp sprite-lab
+play-breaker:
+	sbcl --no-userinit --script scripts/example.lisp prism-breaker
 
-demo-masks:
-	sbcl --no-userinit --script scripts/example.lisp mask-lab
+play-orbit:
+	sbcl --no-userinit --script scripts/example.lisp orbit-patrol
 
-demo-images:
-	sbcl --no-userinit --script scripts/example.lisp image-lab
+play-crater:
+	sbcl --no-userinit --script scripts/example.lisp crater-command
 
-demo-ui:
-	sbcl --no-userinit --script scripts/example.lisp ui-lab
-
-demo-pixels:
-	sbcl --no-userinit --script scripts/example.lisp pixel-lab
+play-echo:
+	sbcl --no-userinit --script scripts/example.lisp echo-grove

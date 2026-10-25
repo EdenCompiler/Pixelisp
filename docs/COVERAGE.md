@@ -14,8 +14,8 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `version` | `px.version` | Library/reference versions and linked SDL version |
 | `Color`, `color`, `colordict` | `px.color`, `px.colordict`, `px:make-color` | RGBA/name/hex/integer parsing, 665 named colors, HSV/HSL/CMY/I1I2I3, saturated arithmetic/inversion, gamma, grayscale/premultiplication, updates and interpolation; palette copies are CL hash tables |
 | `Rect`, `rect` | `px.rect`, `px:make-rect` | Integer geometry, validated updates, scalar/pair anchors, movement/scaling, aspect fitting, line clipping, in-place unions/clamping, object/hash-table collisions |
-| `Surface`, `surface`, `surflock` | `px.surface` | Owned/shared native surfaces, parent coordinates, pixel-format/blend queries, positioned rectangles, list/vector batch blits, RGB/RGBA blend effects, premultiplied alpha, clipping, locks |
-| `display` | `px.display` | Default window/framebuffer, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries |
+| `Surface`, `surface`, `surflock` | `px.surface` | Owned/shared native surfaces, parent coordinates, pixel-format/blend queries, positioned rectangles, list/vector batch blits, RGB/RGBA blend effects, premultiplied alpha, clipping, locks, typed native views and bounded raw byte buffers |
+| `display` | `px.display` | Default window/framebuffer, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries, iconify request, screensaver control |
 | `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
 | `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams, PNG/JPEG/BMP saving, raw pixel byte conversions and shared 32-bit foreign imports |
@@ -24,14 +24,14 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `key` | `px.key` | Scancode state, keyword names, modifiers, focus, text-input controls and configurable pump-delivered native key repeat |
 | `mouse` | `px.mouse` | Position, relative movement, buttons, visibility, focus, relative mode |
 | `cursors`, `Cursor` | `px.cursors` | System/color/bitmap cursors and ASCII bitmap compilation |
-| `joystick` | `px.joystick` | Enumeration, axes/buttons/hats/balls, lifetime, rumble |
-| `_sdl2.controller` | `px.controller`, `px.sdl2.controller` | Gamepad mappings, normalized axes/buttons, hotplug events, rumble and touchpads |
+| `joystick` | `px.joystick` | Enumeration, hardware GUIDs, power-level reports, axes/buttons/hats/balls, lifetime, rumble |
+| `_sdl2.controller` | `px.controller`, `px.sdl2.controller` | Gamepad mappings, index names, native event-state controls, normalized axes/buttons, hotplug events, rumble and touchpads |
 | `_sdl2.touch` | `px.touch`, `px.sdl2.touch` | Device/finger enumeration and normalized touch events |
 | `time` | `px.time` | Clocks, frame caps, elapsed/raw time, FPS, delay, pump-delivered timers |
-| `math`, `Vector2`, `Vector3` | `px.math` | Vector arithmetic, updates, length scaling, geometry, scalar/vector interpolation, decimal rounding, bounded movement, degree/radian rotations, scalar clamp and polar/spherical conversion |
+| `math`, `Vector2`, `Vector3` | `px.math` | Vector arithmetic, indexed components and swizzles with validated writes, updates, length scaling, geometry, scalar/vector interpolation, decimal rounding, bounded movement, degree/radian rotations, scalar clamp and polar/spherical conversion |
 | `mask`, `Mask` | `px.mask` | Bit masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
-| `sprite` | `px.sprite` | CLOS sprites, single/ordered/layered/dirty groups, membership/update, blend flags, draw-order queries and collision helpers |
-| `font`, `sysfont` | `px.font`, `px.sysfont` | UTF-8 SDL_ttf text, metrics/styles, fontconfig discovery, bundled fallback font |
+| `sprite` | `px.sprite` | CLOS sprites, single/ordered/layered/dirty groups, membership/update, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
+| `font`, `sysfont` | `px.font`, `px.sysfont` | UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
 | `freetype`, `_freetype` | `px.freetype` | Direct FreeType glyph rasterization, kerning, metrics, bitmap layout and styles |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Sounds, channels, volume/panning, fades/queues, streamed music, playback controls and pump-delivered completion events |
@@ -48,7 +48,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `_sdl2`, `_sdl2.sdl2`, `_sdl2.video` | `px.sdl2`, `px.sdl2.video` | Separate windows/renderers/textures, upload, draw, presentation and property controls |
 | `_sdl2.audio` | `px.sdl2.audio` | Raw queued PCM playback/capture devices, enumeration and ownership |
 | `_sdl2.mixer` | `px.sdl2.mixer` | Post-mix observation via a bounded native PCM ring, drained on the Lisp thread |
-| `examples` | `px.examples`, `pixelisp/examples` | Catalog/CLI, Star Collector, sprite/mask/image/UI/pixel labs, gradients and source/result charts, blend/palette/UI pictures, in-memory image decoding, display report, procedural sound, completion-event and mask utilities |
+| `examples` | `px.examples`, `pixelisp/examples` | Four playable games—Prism Breaker, Orbit Patrol, Crater Command, and Echo Grove—with a shared 900×620 runner, deterministic bounded runs, synthetic input, gameplay snapshots, and generated audio |
 | `tests` | `pixelisp/tests` | FiveAM runner and opt-in device integration tests |
 | `cdrom`, `Overlay` | `px.cdrom`, `px:make-overlay` | Retired with SDL2; explicit unavailable results/conditions |
 | `rwobject`, `pkgdata`, packaging helpers | ASDF, pathnames, native adapters | Lisp-native resource paths/builds; no Python import, pickle or PyInstaller protocols |
@@ -60,13 +60,20 @@ The exported Lisp symbols and module API guides describe the actual interface.
 - Tuples become Lisp sequences or value objects. Pixel arrays use X/Y/channel
   axes, and sound arrays use frames/channels. Live foreign views are explicit
   objects, not NumPy arrays or implementation-specific foreign CL arrays.
-  Raw array writes ignore drawing clips, shared alpha views require a real
+  Native surface views lock immediately. Raw byte buffers for cropped
+  subsurfaces are bounded by the root allocation, which can shorten final-row
+  padding compared with pygame. Raw array writes ignore drawing clips,
+  shared alpha views require a real
   alpha channel, and byte offsets/strides reflect imported channel layouts.
   PixelArray comparisons decode colors across different native layouts; copied
   selection/comparison masks use bits rather than new PixelArray wrappers.
 - Drawing, antialiasing, alpha rounding, filtered transforms, and text layout
   can differ from pygame's exact pixels. The implementation favors readable
   CPU algorithms; there is no performance or bit-exact parity claim.
+- Dirty-group redraws restore saved backgrounds and redraw every visible member
+  in draw order to preserve overlap. They can report broader damage than
+  pygame's optimized dirty rectangles; returned damage is clipped to the
+  effective target and group clip.
 - Laplacian edges use deterministic opaque white padding and snapshotted
   inputs. The local pygame 2.6.1 build produced varying corner pixels, so its
   differential fixture compares interior responses; Lisp tests verify the

@@ -1,28 +1,28 @@
 # Working on Pixelisp
 
 Start by running `make test`, then run `make demo` and read
-`examples/examples.lisp`. The example follows the same explicit loop as pygame:
-process events, update game state, draw, and present.
+`examples/common.lisp` and `examples/prism-breaker.lisp`. The shared game runner
+follows the familiar event, update, draw, and present loop.
 
 ## Code map
 
 | Area | Start here | Responsibility |
 | --- | --- | --- |
 | Systems and public foundations | `pixelisp.asd`, `src/packages.lisp` | Load order, optional dependencies, shared exports |
-| Portable values | `src/core.lisp`, `src/colors.lisp`, `src/math.lisp` | Conditions, resource protocol, colors/conversions, rectangles, vectors |
+| Portable values | `src/core.lisp`, `src/colors.lisp`, `src/math.lisp`, `src/vector-access.lisp` | Conditions, resource protocol, colors/conversions, rectangles, vectors |
 | Collection geometry | `src/rect-tools.lisp` | In-place geometry, scaling, and collision queries over Lisp collections |
 | Named colors | `src/color-names.lisp` | Bundled color-name facts and defensive palette copies |
-| Pixel ownership | `src/surface.lisp`, `src/buffer.lisp` | SDL surfaces, borrowed parents, locks, disposal, scoped views |
+| Pixel ownership | `src/surface.lisp`, `src/surface-views.lisp`, `src/buffer.lisp` | SDL surfaces, borrowed parents, locks, disposal, scoped views |
 | Default window and loop | `src/runtime.lisp` | Initialization, display, event decoding, keyboard/mouse, clocks/timers |
 | Pure image algorithms | `src/graphics.lisp` | Rasterization, transforms, bit masks |
 | Mask painting | `src/mask-surface.lisp` | Destination clips, optional color planes, alias-safe snapshots |
 | Game objects | `src/sprite.lisp` | CLOS sprites, groups, layers, collisions |
 | Array interfaces | `src/arrays.lisp`, `src/sndarray.lisp` | Copying versus sharing pixel/sample data |
 | Media adapters | `src/media.lisp`, `src/freetype.lisp` | Image codecs, fonts, sound chunks/channels, streamed music |
-| Native devices | `src/devices.lisp`, `src/midi.lisp`, `src/camera.lisp` | Input, clipboard, PortMidi, V4L2 |
+| Native devices | `src/devices.lisp`, `src/device-info.lisp`, `src/midi.lisp`, `src/camera.lisp` | Input, clipboard, PortMidi, V4L2 |
 | Explicit SDL APIs | `src/sdl2-ext.lisp`, `native/pixelisp-native.c` | Renderer ownership trees, queued audio, capture bridge |
 | Worker helpers | `src/threads.lisp` | Ordered parallel mapping and exception propagation |
-| Runnable examples | `examples/*-lab.lisp`, `examples/catalog.lisp` | Small interactive loops and a shared CLI/REPL registry |
+| Runnable games | `examples/common.lisp`, `examples/*-*.lisp`, `examples/catalog.lisp` | Shared runner, four mini-games, and CLI/REPL registry |
 
 The native-independent `pixelisp/core` system must stay loadable without SDL.
 Sprite drawing resolves the surface API when called, so geometry and group
@@ -75,33 +75,27 @@ joysticks, and device-independent MIDI/camera utilities. `make test-x11` adds a
 real X11 backend inside Xvfb, including a clipboard round-trip and independently
 acquired/released mouse and keyboard grabs on a focused window.
 
-`make test-examples` runs the examples' separate ASDF/FiveAM suite with bounded
-frames. It posts synthetic mouse clicks and mode-switch keys through the event
-queue, and checks cleanup after both successful runs and callback failures.
-Add new examples to `examples/catalog.lisp` and `docs/EXAMPLES.md`; cache static
-art and share immutable images instead of allocating them on every frame or
-for every particle. Keep helper names prefixed with the example's name, since
-all examples share the `px.examples` package.
+`make test-examples` runs bounded game sessions with synthetic input and checks
+cleanup after both successful runs and callback failures. Add a game to
+`examples/catalog.lisp` and `docs/EXAMPLES.md`; use a focused factory that
+returns the shared mini-game callbacks and pure state helpers for game rules.
+Keep helper names prefixed with the game's name, since all games share the
+`px.examples` package.
 
-The UI lab combines independent corner radii and Color arithmetic with queue
-filters and native grabs. Keep static art cached, use `with-init` to clear
-queue state on exit, and let window destruction release native grabs. Filter
-changes and worker posting use the same queue lock; avoid recursively calling
-a public locking function while already holding that lock.
+Allocate native surfaces, fonts, and generated tones during game construction
+and reuse them during play. Keep update state independent of SDL where
+practical, use the shared deterministic random helper, and test meaningful
+transitions such as scoring, damage, victory, loss, and reset. Use rectangular
+or mask collisions that match the game's mechanics; keep rendering work bounded
+and draw through cached native assets.
 
-The pixel lab demonstrates packed views, weighted selection and transposition.
-Close dependent views before their parents, then draw only after surface locks
-are released. PixelArray color operations must decode the owner's native
-format, including for sliced views; compare layouts with different channel
-orders in tests. Keyboard-repeat tests drive the production SDL pump as well
-as deterministic timer boundaries, without physical input or long sleeps.
-
-The system recipes decode an embedded PNG and inspect video capabilities.
-Encoded image data belongs in `load`/`load-bytes`; raw pixel bytes belong in
-`from-bytes`. Native decoders retain the RW stream and backing memory until
-decoding finishes. Once `wrap-surface` accepts an owned native image, it must
-release that allocation even if normalization fails. Keep regression tests for
-allocation, conversion and copy failures alongside normal image round-trips.
+The four games exercise distinct parts of the library: Prism Breaker uses
+rectangle collisions, vector reflection, surface blits, and generated tones;
+Orbit Patrol uses turning and thrust, rotated masks, projectiles, and
+invulnerability; Crater Command changes both landscape pixels and collision
+masks after ballistic impacts; Echo Grove combines sequence state, event
+input, ordered pad sprites, and optional audio. The shared runner owns initialization,
+input tracking, pause/restart handling, presentation, and resource cleanup.
 
 Mixer completion records are produced and drained by Lisp-side playback/update
 operations. Keep native callbacks free of arbitrary Lisp execution. Test rapid

@@ -65,7 +65,7 @@ same dimensions and pixel byte size. Its raw output ignores destination clips
 and source blending/color keys; an input snapshot makes overlapping inputs
 and in-place operation stable. Alpha is filtered too, so fully opaque RGBA
 input can produce transparent edges. Use an opaque source when displaying
-RGB edge responses, as the image lab does.
+RGB edge responses, such as an opaque gameplay backdrop.
 
 ```lisp
 (let ((half (px.transform:smoothscale source '(64 48)))
@@ -118,6 +118,24 @@ settable. Arithmetic such as `add`, `subtract`, `multiply`, and `divide`
 returns a new vector; scalar second arguments apply to every component.
 Functions ending in `-ip` mutate their first vector and return it.
 
+`component` reads a coordinate by zero-based index; negative indices count from
+the end. It supports `setf`. `swizzle` reads lowercase `x`/`y`/`z` patterns,
+including repeated coordinates and embedded `0`/`1` constants. A one-character
+pattern returns a number; longer patterns return a fresh list. Patterns must
+contain a coordinate valid for the vector's dimension.
+
+```lisp
+(let ((velocity (px:make-vector2 3 4)))
+  (setf (px.math:component velocity -1) 8)
+  (px.math:swizzle velocity "xy01") ; => (3 8 0 1)
+  (setf (px.math:swizzle velocity "xy") (px.math:swizzle velocity "yx"))
+  (px.math:components velocity))  ; => (8 3)
+```
+
+Writable patterns contain distinct coordinates, with no constants. Assign a
+scalar to a single coordinate, or a list/vector matching the pattern's length.
+All indices, selectors, and values are checked before any coordinate changes.
+
 ```lisp
 (let* ((velocity (px:make-vector2 3 4))
        (direction (px.math:normalize velocity))
@@ -168,10 +186,6 @@ it tests the lower bound first; reversed bounds are not reordered.
 (px.math:clamp health 0 100)
 ```
 
-`px.examples:effects-demo` returns a surface showing ordinary alpha, additive,
-tinted, and premultiplied drawing in four panels. It uses HSV colors, rectangle
-fitting, and `px.surface` blend flags; see the surface guide for the effects API.
-
 ## Sprites and groups
 
 Sprites are CLOS instances intended for subclassing. A sprite has an `image`,
@@ -193,6 +207,8 @@ sides of membership without disposing the old sprite's image. Copies retain
 the class and share the sprite while keeping independent membership.
 `get-top-sprite`/`get-bottom-sprite` return the last/first sprite in draw order,
 or NIL for an empty group.
+`get-sprite` reads a group's draw-order sequence by index; negative indices
+count backward from the end, so `-1` selects the last sprite.
 
 ```lisp
 (defclass player (px.sprite:sprite) ())
@@ -211,6 +227,30 @@ or visibility changes; pass a background surface or restoration callback to
 `draw`/`clear` to erase prior pixels. Collision helpers include rectangle,
 circle, and mask tests; `sprite-collide` and `group-collide` accept a custom
 collision predicate.
+
+Dirty groups expose `get-clip`/`set-clip` and `repaint-rect`. The clip getter
+returns a copy; the setter copies its rectangle, and NIL removes the extra clip.
+The group clip intersects the target surface's clip and is restored after a
+group operation. Changing the group clip forces a redraw; with a background,
+the newly permitted area is refreshed so widening the clip clears old pixels.
+Pixels outside the current clip remain untouched. `repaint-rect` copies
+the supplied rectangle, restores that background region, and requests a group
+redraw; use it after painting over a static background while sprites in the
+region remain stationary.
+
+A dirty-group update restores prior sprite bounds, pending erasures, and queued
+repaint rectangles, then redraws all visible members in draw order to preserve
+overlap. Its returned damage rectangles are clipped to the effective target
+and group clip. This rebuild reports broader damage than pygame's optimized
+rectangle updates. If a restoration callback signals, the group keeps a full
+redraw pending so a later `draw` can retry.
+
+```lisp
+(px.surface:fill background "tomato" '(90 105 300 105))
+(px.sprite:repaint-rect actors '(90 105 300 105))
+(px.sprite:set-clip actors '(140 75 240 160))
+(px.sprite:draw actors screen background)
+```
 
 Sprite constructors accept `:blend-flags`, and the settable `blend-flags`
 property controls the surface `:special-flags` used by group drawing. Changing
