@@ -17,6 +17,7 @@
   (signals type-error (px.examples:run-example "prism-breaker" :frames -1))
   (signals type-error (px.examples:run-example "prism-breaker" :seed -1))
   (signals type-error (px.examples:run-example "prism-breaker" :fixed-dt 1))
+  (signals type-error (px.examples:run-example "prism-breaker" :backend :unknown))
   (is (%clean-run-p)))
 
 (test all-games-render-without-audio-and-release-their-assets
@@ -102,3 +103,66 @@
                (is (> (px:color-r (px.surface:get-at image '(80 154))) 200)))))
       (when (probe-file path) (delete-file path))))
   (is (%clean-run-p)))
+
+(test renderer-backend-runs-the-same-games-and-input
+  ;; A presentation change must not change seeded gameplay or its event loop.
+  (dolist (entry (px.examples:list-examples))
+    (let ((snapshots
+            (loop for backend in '(:surface :renderer) collect
+              (let ((frame 0))
+                (let ((pixelisp.internal:*pump-hooks*
+                        (cons (lambda ()
+                                (when (= 1 (incf frame))
+                                  (px.event:post (px.event:make-event :key-down :key :space))))
+                              pixelisp.internal:*pump-hooks*)))
+                  (px.examples:run-example (getf entry :name) :backend backend :seed 7
+                                            :frames 3 :fps 0 :fixed-dt 0.02d0 :audio nil))))))
+      (is (eq :renderer (getf (second snapshots) :backend)))
+      (is (equalp (loop for (key value) on (first snapshots) by #'cddr
+                       unless (eq key :backend) append (list key value))
+                  (loop for (key value) on (second snapshots) by #'cddr
+                       unless (eq key :backend) append (list key value))))
+      (is (%clean-run-p)))))
+
+(test renderer-screenshot-captures-presented-pixels
+  (let ((path (merge-pathnames (format nil "pixelisp-renderer-~A.png" (gensym))
+                              (uiop:temporary-directory))))
+    (unwind-protect
+         (progn
+           (px.examples:play :frames 0 :audio nil :backend :renderer :screenshot path)
+           (px:with-init (:video nil)
+             (px:with-resource (image (px.image:load path))
+               (is (equal '(900 620) (px.surface:size image)))
+               (is (> (px:color-r (px.surface:get-at image '(80 154))) 200)))))
+      (when (probe-file path) (delete-file path))))
+  (is (%clean-run-p)))
+
+(test renderer-runner-cleans-up-after-callback-failure
+  (let ((pixelisp.internal:*pump-hooks*
+          (cons (lambda () (error "Injected renderer callback failure"))
+                pixelisp.internal:*pump-hooks*)))
+    (signals simple-error (px.examples:play :frames 1 :audio nil :backend :renderer)))
+  (is (%clean-run-p)))
+
+(test fullscreen-key-uses-both-window-backends
+  (dolist (backend '(:surface :renderer))
+    (let ((frame 0) (session nil) (modes nil))
+      (let ((pixelisp.internal:*pump-hooks*
+              (cons (lambda ()
+                      ;; The previous frame has finished applying its events.
+                      (push (px.examples::session-fullscreen session) modes)
+                      (case (incf frame)
+                        (1 (px.event:post (px.event:make-event :key-down :key :f11)))
+                        (2 (px.event:post (px.event:make-event :key-down :key :f11 :repeat t)))
+                        (3 (px.event:post (px.event:make-event :key-up :key :f11))
+                           (px.event:post (px.event:make-event :key-down :key :f11)))))
+                    pixelisp.internal:*pump-hooks*)))
+        (let ((snapshot (px.examples::%run-mini-game
+                         (lambda (new-session)
+                           (setf session new-session)
+                           (px.examples::make-prism-breaker new-session))
+                         :backend backend :frames 3 :fps 0 :fixed-dt 0.02d0 :audio nil)))
+          (is (equal '(nil t t) (nreverse modes)))
+          (is (not (getf snapshot :fullscreen)))
+          (is (eq :playing (getf snapshot :status))))))
+    (is (%clean-run-p))))

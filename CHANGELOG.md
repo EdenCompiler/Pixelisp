@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Add SDL renderer target scopes, viewport/logical scaling, readback, texture
+  updates, blend controls, and rotation origins.
+- Add texture atlas Image views with nested crops and independent drawing
+  modifiers, plus independent-window identity, fullscreen, opacity, grab, icon,
+  resize, border, focus and minimize/maximize/restore controls.
+- Add surface RLE hints and lock queries, with explicit ownership and view rules.
+- Add FreeType baseline placement, inverted coverage and raw array/view rendering.
+- Add a selectable renderer backend and F11 fullscreen control to the four
+  mini-games; use RLE for Orbit Patrol's cached frames.
+- Expand differential fixtures against pygame 2.6.1 and register previously
+  omitted PixelArray and rounded-rectangle tests with the main FiveAM suite.
+
 - Add scoped Surface byte, packed-pixel, RGB, and channel views; bound cropped
   raw buffers by their owners' allocations. Add vector indexing and swizzling
   with validated `setf`, joystick GUID/power queries, and controller event-state

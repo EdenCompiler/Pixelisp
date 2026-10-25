@@ -92,6 +92,45 @@ type persists across shutdown. Shutdown discards undelivered records.
 
 ## Direct FreeType
 
-Load `pixelisp/freetype` for `px.freetype`. It renders glyph coverage directly and returns a surface with baseline-relative bounds from `render`; `render-raw` returns a packed alpha mask and its `(width height)`. Fonts expose `kerning`, `antialiased`, sized ascender/descender metrics, glyph metrics, and kerning queries. Each font owns a FreeType face and follows the same explicit disposal rules as SDL_ttf fonts.
+Load `pixelisp/freetype` for `px.freetype`. `render` returns a surface and a
+baseline-relative bounds Rect; `render-raw` returns a packed grayscale mask and
+its `(width height)`. The packed vector is row-major (`x + y * width`). Pass
+`:invert t` to `render-raw` to return `255 - coverage` for every mask pixel.
+
+Fonts expose `kerning`, `antialiased`, sized ascender/descender metrics, glyph
+metrics, and kerning queries. The `origin` property defaults to NIL and can be
+set with `(setf (px.freetype:origin font) t)`. There is no `:origin` constructor
+keyword. With origin disabled, `render-to` and `render-raw-to` treat `dest` as
+the top-left of the rendered bounds. With origin enabled, `dest` is a baseline
+point; both methods offset the glyph bounds by their baseline-relative `x` and
+`y` values. A negative bounds `y` is expected: it is the top edge's offset above
+the baseline, so placement adds it to the baseline's Y coordinate. This keeps
+`get-rect`'s baseline-relative measurements intact while letting callers place
+the baseline directly.
+
+`render-raw-to` writes grayscale coverage into a writable rank-two target and
+returns the original, baseline-relative `get-rect` bounds. The return Rect is
+not clipped or shifted by `dest`; writes are clipped to the target. Targets use
+Pixelisp's `(width height)` X/Y axis order. An ordinary array must have an
+integer element type that can represent every value from 0 through 255. A
+`px.buffer:buffer-view` must be a live, writable rank-two
+`(unsigned-byte 8)` plane, such as a surface alpha-channel view. Pixels whose
+original glyph coverage is zero are left untouched, including in inverted
+mode; for nonzero coverage, `:invert t` writes `255 - coverage`.
+
+```lisp
+(let ((font (px.freetype:make-font nil 24))
+      (surface (px.surface:make-surface '(320 80) :alpha t)))
+  (unwind-protect
+       (px.buffer:with-view (alpha (px.surface:get-view surface "A"))
+         ;; The alpha plane is shared storage: nonzero mask bytes update it in place.
+         (px.freetype:render-raw-to font alpha "Pixelisp" :dest '(12 36)))
+    (px:dispose font)
+    (px:dispose surface)))
+```
+
+Close a surface view when finished; its view locks the surface until closed.
+Each font owns a FreeType face and follows the same explicit disposal rules as
+SDL_ttf fonts.
 
 All sample and image operations in this guide work with SDL's dummy video/audio drivers, so applications can exercise decoding and data manipulation in headless environments. Real playback and window presentation require the corresponding system devices.

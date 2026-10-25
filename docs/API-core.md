@@ -152,6 +152,33 @@ per-pixel alpha is opaque; `:alpha t` starts with transparent pixels. Operations
   inside the clip; `get-bounding-rect` finds non-keyed pixels above an alpha threshold.
 - `size`, `width`, `height`, `get-rect`, and their `get-*` aliases inspect size.
 
+`set-alpha` and `set-colorkey` accept an optional `:rle` boolean. When supplied,
+it enables or disables SDL's run-length encoding (RLE) blit hint; when omitted,
+the current hint is retained. `set-rle` changes the same hint directly and
+returns the requested boolean. `rle-enabled-p` reports that requested hint,
+including while SDL temporarily decodes pixels for access. `must-lock-p` reports
+SDL's current `SDL_MUSTLOCK` state. `get-locked` reports whether any Pixelisp
+locks are active, including locks held by open pixel views; this is distinct from whether
+SDL currently requires a lock before direct pixel access.
+
+RLE can be enabled only on an independently owned root surface with no active
+pixel locks/views or live child subsurfaces. Disable RLE before creating a
+subsurface. Changing the hint while a pixel lock or view is active signals
+`resource-in-use`. `copy` retains the requested RLE hint. SDL documents RLE as
+a source-blit optimization that can require locking for pixel access; pygame
+2.6.1 exposes the corresponding `RLEACCEL` flag on `Surface.set_alpha` and
+`Surface.set_colorkey` ([SDL_SetSurfaceRLE](https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE),
+[SDL_MUSTLOCK](https://wiki.libsdl.org/SDL2/SDL_MUSTLOCK),
+[pygame Surface reference](https://www.pygame.org/docs/ref/surface.html)).
+
+The native RLE transparency path can change results when a source combines a
+color key with per-pixel alpha. In a pygame 2.6.1 probe, an alpha surface with
+pixels `(10 20 30 255)` and `(90 80 70 128)`, keyed on `(10 20 30)`, blitted to
+a transparent alpha surface produced `(10 20 30 255)` and `(45 40 35 255)` with
+RLE enabled; with RLE disabled it produced `(0 0 0 0)` and `(45 40 35 128)`.
+Use either color-key transparency or per-pixel alpha when those pixels must
+retain their usual transparency through blits.
+
 `get-rect` accepts pair anchors such as `:top-right`, `:bottom-left`, `:mid-top`,
 and `:center`, plus scalar position anchors `:x`, `:y`, `:left`, `:top`,
 `:right`, `:bottom`, `:center-x`, and `:center-y`. Compact pygame spellings

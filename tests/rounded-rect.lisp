@@ -1,5 +1,6 @@
 ;;;; Per-corner rounded rectangles: focused CPU pixel and damage fixtures.
 (in-package #:pixelisp.tests)
+(in-suite pixelisp)
 
 (test rounded-rect-radii-inherit-and-square-one-corner
   (with-graphics-surfaces ((surface (px.surface:make-surface '(10 10) :alpha t)))
@@ -21,7 +22,7 @@
     (is (equal '(255 0 0 255) (graphics-rgba surface '(6 2))))
     (px.surface:fill surface '(0 0 0 0))
     (px.draw:rect surface '(0 0 255) '(1 1 10 8) :width 2 :border-radius 4)
-    (is (equal '(0 0 255 255) (graphics-rgba surface '(1 2))))
+    (is (equal '(0 0 255 255) (graphics-rgba surface '(5 1))))
     (is (equal '(0 0 0 0) (graphics-rgba surface '(1 1))))
     (is (equal '(0 0 0 0) (graphics-rgba surface '(5 4))))
     ;; Oversized inward outlines consume the interior while staying in bounds.

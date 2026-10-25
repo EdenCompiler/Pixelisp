@@ -51,7 +51,17 @@
   (:export #:window #:renderer #:texture #:make-window #:make-renderer #:make-texture
            #:texture-from-surface #:close #:title #:size #:position #:show #:hide
            #:clear #:present #:draw-color #:draw-line #:draw-point #:fill-rect #:draw-texture
-           #:texture-size #:texture-alpha #:texture-color #:with-window #:with-renderer))
+           #:texture-size #:texture-alpha #:texture-color #:with-window #:with-renderer
+           #:target-supported-p #:target #:with-render-target #:viewport #:get-viewport #:set-viewport
+           #:logical-size #:renderer-scale #:draw-blend-mode #:draw-rect #:to-surface
+           #:update-texture #:texture-blend-mode #:texture-get-rect
+           #:window-id #:window-display-index #:window-resizable-p #:window-borderless-p
+           #:window-opacity #:window-fullscreen-mode #:set-fullscreen #:set-windowed
+           #:maximize-window #:minimize-window #:restore-window #:focus-window
+           #:window-grab-p #:set-window-icon
+           #:image #:make-image #:image-texture #:image-source-rect #:image-get-rect #:draw-image
+           #:image-angle #:image-origin #:image-flip-x #:image-flip-y
+           #:image-color #:image-alpha #:image-blend-mode))
 (in-package #:pixelisp.sdl2.video)
 (cffi:defcfun ("SDL_CreateWindow" %window-new) :pointer (title :string) (x :int) (y :int) (w :int) (h :int) (flags :uint32))
 (cffi:defcfun ("SDL_DestroyWindow" %window-close) :void (p :pointer))
@@ -121,8 +131,17 @@
   ;; to the call instead of changing the application's floating-point mode.
   (pixelisp.internal:with-native-context
     (check-type window window)
-    (let ((object (%new 'renderer (%renderer-new (%pointer window) -1 (logior (if accelerated 2 0) (if vsync 4 0))) window)))
-      (pixelisp.devices.internal:check-code (%blend-set (%pointer object) 1) 'renderer-blend) object)))
+    (let ((object (%new 'renderer (%renderer-new (%pointer window) -1
+                                  (logior (if accelerated 2 0) (if vsync 4 0))) window))
+          (complete nil))
+      ;; A failed setup must release the native renderer before a caller tries
+      ;; another backend on this window, as the mini-game runner does.
+      (unwind-protect
+           (progn
+             (pixelisp.devices.internal:check-code (%blend-set (%pointer object) 1) 'renderer-blend)
+             (setf complete t)
+             object)
+        (unless complete (pixelisp.internal:dispose object))))))
 (defun make-texture (renderer size &key (access :static))
   "Allocate an RGBA texture; ACCESS is :STATIC, :STREAMING, or :TARGET."
   (pixelisp.internal:with-native-context
@@ -172,16 +191,20 @@
   (pixelisp.internal:with-native-context
     (cffi:with-foreign-object (p '(:struct native-rect))
       (%put-rect p rect) (pixelisp.devices.internal:check-code (%fill (%pointer renderer) p) 'fill-rect)) renderer))
-(defun draw-texture (renderer texture &key source destination (angle 0d0) flip-x flip-y)
-  "Copy TEXTURE into RENDERER with optional rectangles, rotation and flips."
+(defun draw-texture (renderer texture &key source destination (angle 0d0) origin flip-x flip-y)
+  "Copy TEXTURE into RENDERER with optional rectangles, rotation, origin and flips."
   (pixelisp.internal:with-native-context
     (check-type renderer renderer) (check-type texture texture)
     (unless (eq renderer (%parent texture)) (error 'pixelisp:error :operation 'draw-texture :message "Texture belongs to a different renderer."))
-    (cffi:with-foreign-objects ((s '(:struct native-rect)) (d '(:struct native-rect)))
+    (cffi:with-foreign-objects ((s '(:struct native-rect)) (d '(:struct native-rect)) (o '(:struct native-rect)))
       (when source (%put-rect s source)) (when destination (%put-rect d destination))
+      (when origin
+        (multiple-value-bind (x y) (pixelisp.internal:pair origin)
+          (setf (cffi:foreign-slot-value o '(:struct native-rect) 'x) (truncate x)
+                (cffi:foreign-slot-value o '(:struct native-rect) 'y) (truncate y))))
       (pixelisp.devices.internal:check-code
        (%copy (%pointer renderer) (%pointer texture) (if source s (cffi:null-pointer)) (if destination d (cffi:null-pointer))
-              (coerce angle 'double-float) (cffi:null-pointer) (logior (if flip-x 1 0) (if flip-y 2 0))) 'draw-texture)) renderer))
+              (coerce angle 'double-float) (if origin o (cffi:null-pointer)) (logior (if flip-x 1 0) (if flip-y 2 0))) 'draw-texture)) renderer))
 (defun texture-size (texture)
   (cffi:with-foreign-objects ((w :int) (h :int))
     (pixelisp.devices.internal:check-code (%texture-query (%pointer texture) (cffi:null-pointer) (cffi:null-pointer) w h) 'texture-size)

@@ -138,8 +138,134 @@ PortTime milliseconds. No port is opened by loading the system.
     (px.sdl2.video:present renderer)))
 ```
 
-Textures belong to the renderer that created them. Closing a window or
-renderer closes its children first. Raw audio devices are opened paused;
+Window controls work with any live `px.sdl2.video:window` and must run on the
+video thread. `window-id` and `window-display-index` are read-only queries.
+`window-resizable-p`, `window-borderless-p`, and `window-grab-p` are readable
+and settable boolean states. `window-opacity` reads or sets opacity from 0.0
+(transparent) to 1.0 (opaque); a backend that does not support opacity signals
+`px:unsupported-feature`. `set-fullscreen` requests fullscreen, with `:desktop
+t` selecting desktop-sized mode; `set-windowed` exits fullscreen, and
+`window-fullscreen-mode` reports NIL, `:desktop`, or `:exclusive`. These are
+requests to SDL and the window manager, so actual state changes can be
+asynchronous or platform-dependent. `maximize-window`, `minimize-window`,
+`restore-window`, and `focus-window` issue the corresponding window-manager
+requests. `set-window-icon` takes a software surface and rejects a locked one.
+
+```lisp
+(px.sdl2.video:with-window (window :title "Pixelisp" :size '(800 600)
+                                   :resizable t)
+  (format t "SDL window ~D on display ~D~%"
+          (px.sdl2.video:window-id window)
+          (px.sdl2.video:window-display-index window))
+  (setf (px.sdl2.video:window-borderless-p window) nil)
+  (when (eq :desktop (px.sdl2.video:window-fullscreen-mode window))
+    (px.sdl2.video:set-windowed window)))
+```
+
+The controls follow pygame 2.6.1's `_sdl2.video.Window` API where applicable;
+see the [tagged pygame 2.6.1 source](https://github.com/pygame/pygame/blob/2.6.1/src_c/cython/pygame/_sdl2/video.pyx)
+and the [SDL2 video reference](https://wiki.libsdl.org/SDL2/CategoryVideo).
+
+The renderer controls include `draw-rect`, `viewport`, `logical-size`,
+`renderer-scale`, and `draw-blend-mode`. Their getters return the current SDL
+state; setters accept a rectangle or NIL for the full viewport, a positive
+`(width height)` logical size (or `(0 0)` to disable it), positive scale
+factors, and blend keywords `:none`, `:blend`, `:add`, `:mod`, `:mul` or SDL
+blend-mode integers. These settings affect renderer operations and do not
+change the separate software display surface.
+
+Target textures let a renderer draw into a texture and use that texture later.
+Check `target-supported-p` first; create the texture with `:access :target`,
+then bind it using `with-render-target`. The macro restores the prior target,
+including when its body signals an error. `target` returns the bound texture
+or NIL. A target must belong to the same renderer. Closing a window or
+renderer closes its children first, and disposing an active target unbinds it.
+
+```lisp
+(let ((target (px.sdl2.video:make-texture renderer '(128 96) :access :target)))
+  (unwind-protect
+       (px.sdl2.video:with-render-target (renderer target)
+         (px.sdl2.video:clear renderer '(30 40 70 255))
+         (px.sdl2.video:draw-texture renderer sprite :destination '(16 16 32 32)
+                                      :angle 20 :origin '(0 0)))
+    (px.sdl2.video:close target)))
+```
+
+`to-surface` reads pixels from the current target into a new RGBA surface, or
+overwrites a supplied surface. `:area` is a physical-pixel rectangle within
+the current target; a supplied destination must use 32-bit pixels and have
+exactly that area's width and height. Active destination views/locks must be
+closed first. Readback uses the destination's native format and pitch, including
+BGRA buffers and padded subsurfaces, and ignores the surface's drawing clip.
+SDL reads only the intersection with the renderer's physical viewport. Pixels
+outside it remain unchanged in a supplied destination, or transparent in a new
+surface. Readback preserves the renderer's viewport, scale and logical size.
+The operation
+is slow and is best kept out of a per-frame
+path. Read the backbuffer before `present` when you need the current frame.
+
+Textures belong to the renderer that created them. `texture-get-rect` returns
+a texture-sized rectangle and accepts the same anchor/value pairs as
+`px.surface:get-rect`. `update-texture` uploads a software surface, converting
+its pixel format to the texture's format when needed. For a partial update,
+`:area` selects the destination rectangle while the uploaded source patch
+starts at the source surface's top-left. The area must fit the texture, and
+the source must be at least as wide and high as the area; out-of-bounds updates
+signal an error instead of clipping. SDL documents texture updates as slow and
+recommends them for textures that change infrequently.
+
+`draw-texture` accepts `:source`, `:destination`, `:angle`, `:flip-x`, and
+`:flip-y`; `:origin` supplies the rotation point relative to the destination's
+top-left. Without an origin SDL rotates around the destination center. These
+texture calls, like the renderer controls, must run on the video thread.
+
+## Texture atlas images
+
+`make-image` creates a lightweight `image` view over a renderer-owned texture;
+it does not copy or allocate pixel data. Its optional source rectangle is a
+nonempty, contained crop relative to the input texture or parent image. A child
+crop can be nested inside that parent crop. Rectangles are strict: zero-sized
+and out-of-bounds regions signal an error rather than being clipped.
+
+`image-source-rect` returns a copy of the view's rectangle in absolute texture
+coordinates. Setting it also takes an absolute texture-coordinate rectangle
+and requires it to remain inside the view's parent region. `image-get-rect`
+returns a positioned copy of the view rectangle using the same anchor/value
+pairs as `texture-get-rect`; changing the returned rect does not mutate the
+image. The `image-texture` setter can rebind a view to another texture owned by
+the same renderer, provided the parent region fits. The modifier accessors
+(`image-angle`, `image-origin`, `image-flip-x`, `image-flip-y`, `image-color`,
+`image-alpha`, and `image-blend-mode`) read or set per-view drawing state.
+Origin and color getters return copies. Colors accept the same lists, vectors,
+and `px:color` values as other Pixelisp color arguments; `image-alpha` is an
+integer from 0 through 255. Blend mode accepts `:none`, `:blend`, `:add`,
+`:mod`, `:mul` or the corresponding SDL values 0, 1, 2, 4, and 8.
+
+`draw-image` accepts an optional contained `:source` crop relative to the view.
+Its `:destination` can be a `(x y)` position, a rectangle that scales the image,
+or NIL to fill the renderer's current viewport. Angle, origin, flip, color,
+alpha, and blend settings come from the image. Since SDL stores color/alpha/blend
+modifiers on the shared texture, Pixelisp applies the image's values for the
+draw and restores the texture's previous values afterwards, even if drawing
+fails. This keeps two atlas views of the same texture independent. Images
+retain their texture wrapper, but become unusable when that texture is closed;
+all image access and drawing must run on the video thread.
+
+```lisp
+(let* ((atlas (px.sdl2.video:make-image texture))
+       (button (px.sdl2.video:make-image atlas '(16 8 32 16)))
+       (icon (px.sdl2.video:make-image button '(8 0 16 16))))
+  (setf (px.sdl2.video:image-color icon) '(255 220 180)
+        (px.sdl2.video:image-alpha icon) 224
+        (px.sdl2.video:image-angle icon) 8)
+  (px.sdl2.video:draw-image renderer icon :destination '(20 30)))
+```
+
+The API follows pygame's `_sdl2.video` texture, renderer surface, and image
+behavior where applicable: [pygame 2.6.1 source](https://github.com/pygame/pygame/blob/2.6.1/src_c/cython/pygame/_sdl2/video.pyx)
+and [pygame SDL2 video reference](https://www.pygame.org/docs/ref/sdl2_video.html).
+SDL's [render readback reference](https://wiki.libsdl.org/SDL2/SDL_RenderReadPixels)
+documents the readback call and its performance warning. Raw audio devices are opened paused;
 `queue` accepts PCM octets in the negotiated format and `start` begins
 playback. `dequeue` reads octets from an explicitly opened capture device.
 Use `devices` to list device names without opening them.

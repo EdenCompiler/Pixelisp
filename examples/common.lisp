@@ -7,6 +7,7 @@
 
 (defstruct (game-session (:conc-name session-))
   screen (width 900) (height 620) (elapsed 0d0) (seed 1)
+  (backend :surface) window renderer texture frame-image (fullscreen nil)
   held-keys (mouse-pos (list 450 310)) (audio-enabled nil)
   (fonts (make-hash-table)) (labels (make-hash-table :test #'equal))
   (tones (make-hash-table :test #'equal)))
@@ -106,14 +107,59 @@ SNAPSHOT returns ordinary values that remain usable after native cleanup."
 (defun %game-playing-p (game)
   (eq :playing (getf (funcall (mini-game-snapshot game) (mini-game-state game)) :status)))
 
-(defun %draw-game-frame (game session paused)
+(defun %open-game-session (backend seed)
+  "Keep the same CPU game canvas for either presentation backend."
+  (if (eq backend :surface)
+      (make-game-session :seed seed
+                        :screen (px.display:set-mode '(900 620) :title "Pixelisp mini-games"))
+      ;; SDL forbids using a window surface and renderer on the same window.
+      ;; This independent window owns the renderer and its streaming texture.
+      (let* ((window (px.sdl2.video:make-window :size '(900 620) :resizable t))
+             (renderer (handler-case (px.sdl2.video:make-renderer window :accelerated t)
+                         (px:error () (px.sdl2.video:make-renderer window))))
+             (texture (px.sdl2.video:make-texture renderer '(900 620) :access :streaming)))
+        (setf (px.sdl2.video:logical-size renderer) '(900 620)
+              (px.sdl2.video:texture-blend-mode texture) :none)
+        (make-game-session :seed seed :backend backend :window window
+                           :renderer renderer :texture texture :frame-image (px.sdl2.video:make-image texture)
+                           :screen (px.surface:make-surface '(900 620))))))
+
+(defun %toggle-game-fullscreen (session)
+  "Keep fullscreen requests on the video thread for either window backend."
+  (setf (session-fullscreen session)
+        (if (session-window session)
+            (let ((window (session-window session)))
+              (if (px.sdl2.video:window-fullscreen-mode window)
+                  (progn (px.sdl2.video:set-windowed window) nil)
+                  (progn (px.sdl2.video:set-fullscreen window :desktop t) t)))
+            (px.display:toggle-fullscreen))))
+
+(defun %present-game (session screenshot)
+  "Upload the finished frame, capturing renderer pixels before presenting."
+  (let ((renderer (session-renderer session)) (screen (session-screen session)))
+    (if renderer
+        (progn
+          (px.sdl2.video:update-texture (session-texture session) screen)
+          (px.sdl2.video:clear renderer '(0 0 0))
+          (px.sdl2.video:draw-image renderer (session-frame-image session)
+                                  :destination '(0 0 900 620))
+          ;; SDL does not promise the backbuffer survives PRESENT. Read it now.
+          (when screenshot
+            (px:with-resource (capture (px.sdl2.video:to-surface renderer))
+              (px.image:save capture screenshot)))
+          (px.sdl2.video:present renderer))
+        (progn
+          (when screenshot (px.image:save screen screenshot))
+          (px.display:flip)))))
+
+(defun %draw-game-frame (game session paused &optional screenshot)
   (let* ((state (mini-game-state game))
          (snapshot (funcall (mini-game-snapshot game) state))
          (status (getf snapshot :status)))
     (funcall (mini-game-on-draw game) state session)
     (%panel session '(0 574 900 46) '(10 17 30))
     (%text session (mini-game-instructions game) 26 580 :size 15)
-    (%text session "P pause   R restart   Esc quit" 874 602 :anchor :top-right
+    (%text session "P pause   R restart   F11 fullscreen   Esc quit" 874 602 :anchor :top-right
            :size 12 :color '(141 175 202))
     (when (or paused (member status '(:won :lost)))
       (%panel session '(225 238 450 150) '(15 25 45) :border-color '(100 165 205))
@@ -121,22 +167,26 @@ SNAPSHOT returns ordinary values that remain usable after native cleanup."
                            (t "TRY AGAIN")) 450 276 :anchor :center :size 30)
       (%text session (if paused "Press P to resume" "Press R for a fresh run")
              450 330 :anchor :center :size 18 :color '(255 216 126)))
-    (px.display:flip)))
+    (%present-game session screenshot)))
 
-(defun %run-mini-game (factory &key frames (fps 60) (audio t) (seed 1) fixed-dt screenshot)
+(defun %run-mini-game (factory &key frames (fps 60) (audio t) (seed 1) fixed-dt screenshot
+                                  (backend :surface))
   "Run a real event/update/draw loop and return its final, native-free snapshot.
 FRAMES and FIXED-DT make the same gameplay loop usable in bounded tests."
   (when frames (check-type frames (integer 0 *)))
   (check-type fps (real 0 *))
   (check-type seed (integer 0 *))
+  (check-type backend (member :surface :renderer))
   (when fixed-dt (check-type fixed-dt (real (0) 0.05)))
   (px:with-init ()
-    (let* ((screen (px.display:set-mode '(900 620) :title "Pixelisp mini-games"))
-           (session (make-game-session :screen screen :seed seed))
+    (let* ((session (%open-game-session backend seed))
            (game (funcall factory session))
            (clock (px.time:make-clock))
            (paused nil) (running t) (frame 0))
-      (px.display:set-caption (format nil "Pixelisp · ~A" (mini-game-title game)))
+      (let ((title (format nil "Pixelisp · ~A" (mini-game-title game))))
+        (if (session-window session)
+            (setf (px.sdl2.video:title (session-window session)) title)
+            (px.display:set-caption title)))
       (when audio
         (handler-case
             (progn
@@ -158,6 +208,7 @@ FRAMES and FIXED-DT make the same gameplay loop usable in bounded tests."
               (cond
                 ((or (eq :quit (px.event:type event)) (eq key :escape)) (setf running nil))
                 ((eq key :p) (setf paused (not paused)))
+                ((eq key :f11) (%toggle-game-fullscreen session))
                 ((eq key :r)
                  (setf paused nil (session-elapsed session) 0d0
                        (session-held-keys session) nil (session-seed session) seed
@@ -169,9 +220,10 @@ FRAMES and FIXED-DT make the same gameplay loop usable in bounded tests."
             (funcall (mini-game-on-step game) (mini-game-state game) dt session))
           (%draw-game-frame game session paused)
           (incf frame)))
-      (when screenshot (px.image:save screen screenshot))
+      (when screenshot (%draw-game-frame game session paused screenshot))
       ;; The snapshot contains ordinary values; WITH-INIT then releases all art,
       ;; fonts, sounds, and the display, including when a callback signals an error.
       (append (funcall (mini-game-snapshot game) (mini-game-state game))
               (list :game (mini-game-id game) :frames frame :paused paused
-                    :audio (session-audio-enabled session))))))
+                    :audio (session-audio-enabled session) :backend backend
+                    :fullscreen (session-fullscreen session))))))

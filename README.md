@@ -100,7 +100,16 @@ sbcl --script scripts/example.lisp prism-breaker --frames 120 --fps 60
 sbcl --script scripts/example.lisp orbit-patrol --no-audio --seed 7
 sbcl --script scripts/example.lisp crater-command --frames 120 --seed 7
 sbcl --script scripts/example.lisp echo-grove --screenshot echo.png
+sbcl --script scripts/example.lisp orbit-patrol --backend renderer
 ```
+
+`--backend renderer` presents the same game through a streaming SDL texture in
+a resizable window. It tries hardware acceleration and falls back to software
+rendering when unavailable. The default `surface` backend keeps the original
+window-surface loop. Both backends support screenshots and bounded runs.
+Press F11 to toggle desktop fullscreen in either backend. The renderer backend
+uses an `Image` view over its framebuffer texture; cached Orbit Patrol frames
+use SDL's RLE source-blit hint.
 
 For a bounded headless smoke test:
 
@@ -146,7 +155,7 @@ make test-examples # Bounded examples with generated mouse/key events.
 
 After loading dependencies, `(asdf:test-system "pixelisp")` runs the same suite.
 The library does not depend on Python. With pygame 2.6.1 installed,
-`python3 scripts/differential.py` runs thirty-nine selected reference fixtures,
+`python3 scripts/differential.py` runs selected reference fixtures,
 including every bundled named color. It needs pygame 2.6.1 only as test tooling.
 
 - [Surface, event, timing, and array APIs](docs/API-core.md)

@@ -1,5 +1,6 @@
 ;;;; PixelArray distance operations, native color decoding, and dependent views.
 (in-package #:pixelisp.tests)
+(in-suite pixelisp)
 
 (test pixelarray-distance-options-and-no-partial-writes
   (px.surface:with-surface (surface '(2 1) :alpha t)

@@ -20,7 +20,7 @@ follows the familiar event, update, draw, and present loop.
 | Array interfaces | `src/arrays.lisp`, `src/sndarray.lisp` | Copying versus sharing pixel/sample data |
 | Media adapters | `src/media.lisp`, `src/freetype.lisp` | Image codecs, fonts, sound chunks/channels, streamed music |
 | Native devices | `src/devices.lisp`, `src/device-info.lisp`, `src/midi.lisp`, `src/camera.lisp` | Input, clipboard, PortMidi, V4L2 |
-| Explicit SDL APIs | `src/sdl2-ext.lisp`, `native/pixelisp-native.c` | Renderer ownership trees, queued audio, capture bridge |
+| Explicit SDL APIs | `src/sdl2-ext.lisp`, `src/renderer-tools.lisp`, `src/texture-tools.lisp`, `src/window-tools.lisp`, `src/atlas.lisp`, `native/pixelisp-native.c` | Window/renderer ownership and state, texture atlases, uploads/readback, queued audio, capture bridge |
 | Worker helpers | `src/threads.lisp` | Ordered parallel mapping and exception propagation |
 | Runnable games | `examples/common.lisp`, `examples/*-*.lisp`, `examples/catalog.lisp` | Shared runner, four mini-games, and CLI/REPL registry |
 

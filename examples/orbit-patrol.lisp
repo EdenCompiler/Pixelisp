@@ -237,7 +237,11 @@
     (dotimes (index 16)
       (let ((image (px.transform:rotate source (* -22.5d0 index))))
         (setf (aref images index) image
-              (aref masks index) (px.mask:from-surface image))))
+              (aref masks index) (px.mask:from-surface image))
+        ;; Cached frames are repeatedly blitted and rarely modified. SDL may
+        ;; compress their transparent runs after the first blit; pixel access
+        ;; remains safe because the surface/view APIs acquire their own locks.
+        (px.surface:set-rle image t)))
     (values images masks)))
 
 (defun %orbit-mask-collision (mask-table width-table)

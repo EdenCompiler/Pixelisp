@@ -1,0 +1,127 @@
+(in-package #:pixelisp.tests)
+(in-suite pixelisp)
+
+(defun %freetype-target-bytes (array)
+  "Copy array storage for assertions about untouched pixels."
+  (loop for index below (array-total-size array) collect (row-major-aref array index)))
+
+(test freetype-origin-places-render-to-at-baseline
+  (let ((font (px.freetype:make-font nil 20))
+        (surface (px.surface:make-surface '(80 60) :alpha t)))
+    (unwind-protect
+         (let* ((bounds (px.freetype:get-rect font "Ag"))
+                (baseline #(20 30)))
+           (setf (px.freetype:origin font) t)
+           ;; A bad point is rejected before a temporary rendered Surface exists.
+           (signals error (px.freetype:render-to font surface #(20 "bad") "Ag"))
+           (signals type-error (px.freetype:render-raw-to surface
+                                 (make-array '(8 8) :element-type '(unsigned-byte 8)) "A" :size 20))
+           (let ((damage (px.freetype:render-to font surface baseline "Ag")))
+             (is (= (+ (aref baseline 0) (px.rect:x bounds)) (px.rect:x damage)))
+             (is (= (+ (aref baseline 1) (px.rect:y bounds)) (px.rect:y damage)))
+             (is (plusp (px.rect:height damage))))
+           ;; Rect destinations are accepted in either placement mode.
+           (setf (px.freetype:origin font) nil)
+           (is (typep (px.freetype:render-to font surface (px:make-rect 3 4 0 0) "A")
+                      'pixelisp:rect)))
+      (px:dispose font)
+      (px:dispose surface))))
+
+(test freetype-raw-array-clipping-zero-preservation-and-inversion
+  (let ((font (px.freetype:make-font nil 22)))
+    (unwind-protect
+         (multiple-value-bind (mask dimensions) (px.freetype:render-raw font "A")
+           (let* ((width (first dimensions)) (height (second dimensions))
+                  (bounds (px.freetype:get-rect font "A"))
+                  (target (make-array '(12 12) :element-type '(unsigned-byte 8) :initial-element 91))
+                  (x0 -3) (y0 4)
+                  (returned (px.freetype:render-raw-to font target "A" :dest (vector x0 y0))))
+             (is (equalp bounds returned))
+             ;; Check every clipped pixel, including zero coverage left untouched.
+             (dotimes (x 12)
+               (dotimes (y 12)
+                 (let ((mask-x (- x x0)) (mask-y (- y y0)))
+                   (if (and (<= 0 mask-x) (< mask-x width)
+                            (<= 0 mask-y) (< mask-y height))
+                       (let ((coverage (aref mask (+ mask-x (* mask-y width)))))
+                         (is (= (if (plusp coverage) coverage 91) (aref target x y))))
+                       (is (= 91 (aref target x y)))))))
+             ;; Wholly offscreen still returns the original font bounds.
+             (let ((before (%freetype-target-bytes target)))
+               (is (equalp bounds (px.freetype:render-raw-to font target "A" :dest '(99 99))))
+               (is (equalp before (%freetype-target-bytes target))))
+             (multiple-value-bind (inverted inverted-dimensions)
+                 (px.freetype:render-raw font "A" :invert t)
+               (is (equal dimensions inverted-dimensions))
+               (dotimes (index (length mask))
+                 (is (= (- 255 (aref mask index)) (aref inverted index))))
+               (let ((inverted-target (make-array '(12 12) :element-type '(unsigned-byte 8) :initial-element 91)))
+                 (px.freetype:render-raw-to font inverted-target "A" :dest (list x0 y0) :invert t)
+                 (dotimes (x 12)
+                   (dotimes (y 12)
+                     (let ((mask-x (- x x0)) (mask-y (- y y0)))
+                       (when (and (<= 0 mask-x) (< mask-x width)
+                                  (<= 0 mask-y) (< mask-y height))
+                         (let ((coverage (aref mask (+ mask-x (* mask-y width)))))
+                           (is (= (if (plusp coverage) (- 255 coverage) 91)
+                                  (aref inverted-target x y))))))))))
+             ;; Validation errors leave the target intact.
+             (let ((before (%freetype-target-bytes target)))
+               (signals error (px.freetype:render-raw-to font (make-array '(4 4) :element-type 'bit) "A"))
+               (signals error (px.freetype:render-raw-to font target "A" :dest #(0 "bad")))
+               (is (equalp before (%freetype-target-bytes target))))))
+      (px:dispose font))))
+
+(test freetype-raw-rendering-uses-baseline-vector-and-keeps-font-rect
+  (let ((font (px.freetype:make-font nil 20)))
+    (unwind-protect
+         (multiple-value-bind (mask dimensions) (px.freetype:render-raw font "Ag")
+           (let* ((bounds (px.freetype:get-rect font "Ag"))
+                  (width (first dimensions)) (height (second dimensions))
+                  (target (make-array '(80 60) :element-type '(unsigned-byte 8) :initial-element 0))
+                  (baseline #(25 35)))
+             (setf (px.freetype:origin font) t)
+             (is (equalp bounds (px.freetype:render-raw-to font target "Ag" :dest baseline)))
+             (dotimes (mask-y height)
+               (dotimes (mask-x width)
+                 (let ((x (+ (aref baseline 0) (px.rect:x bounds) mask-x))
+                       (y (+ (aref baseline 1) (px.rect:y bounds) mask-y))
+                       (coverage (aref mask (+ mask-x (* mask-y width)))))
+                   (when (and (<= 0 x) (< x 80) (<= 0 y) (< y 60) (plusp coverage))
+                     (is (= coverage (aref target x y)))))))))
+      (px:dispose font))))
+
+(test freetype-raw-view-writes-alpha-and-validates-lifetime
+  (let ((font (px.freetype:make-font nil 18))
+        (surface (px.surface:make-surface '(40 30) :alpha t)))
+    (unwind-protect
+         (progn
+           (px.surface:fill surface '(0 0 0 91))
+           (let ((alpha (px.surface:get-view surface "A")))
+           (unwind-protect
+                (progn
+                  (let* ((mask (nth-value 0 (px.freetype:render-raw font "x")))
+                         (dims (nth-value 1 (px.freetype:render-raw font "x")))
+                         (width (first dims)) (height (second dims))
+                         (bounds (px.freetype:render-raw-to font alpha "x" :dest '(3 5))))
+                    (is (equalp bounds (px.freetype:get-rect font "x")))
+                    (dotimes (x 40)
+                      (dotimes (y 30)
+                        (let ((mask-x (- x 3)) (mask-y (- y 5)))
+                          (if (and (<= 0 mask-x) (< mask-x width)
+                                   (<= 0 mask-y) (< mask-y height))
+                              (let ((coverage (aref mask (+ mask-x (* mask-y width)))))
+                                (is (= (if (plusp coverage) coverage 91)
+                                       (px.buffer:view-ref alpha x y))))
+                              (is (= 91 (px.buffer:view-ref alpha x y))))))))
+                  (is (px.surface:locked-p surface)))
+             (px.buffer:close alpha))
+           (is (not (px.surface:locked-p surface)))
+           (signals px:disposed-resource (px.freetype:render-raw-to font alpha "x"))))
+      (let ((read-only (px.buffer:make-view :dimensions '(2 2) :element-type '(unsigned-byte 8)
+                                           :reader (lambda (x y) (declare (ignore x y)) 0))))
+        (unwind-protect
+             (signals error (px.freetype:render-raw-to font read-only "x"))
+          (px.buffer:close read-only)))
+      (px:dispose font)
+      (px:dispose surface))))

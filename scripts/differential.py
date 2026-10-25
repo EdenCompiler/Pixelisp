@@ -38,6 +38,9 @@ CASE_NAMES = [
     "layered dirty clip and repaint",
     "vector component indexing", "vector swizzles", "surface buffer views",
     "padded surface views", "controller event switch",
+    "SDL2 renderer targets and controls", "SDL2 texture partial update",
+    "SDL2 texture rotation origin", "SDL2 nested image atlas rectangles",
+    "SDL2 image modulation pixels", "RLE colorkey alpha and post-blit lock state",
 ]
 
 
@@ -513,6 +516,148 @@ def controller_event_switch():
         controller.quit()
 
 
+def sdl2_renderer_targets_and_controls():
+    from pygame._sdl2 import Window, Renderer, Texture
+    window = Window("renderer fixture", size=(8, 8), hidden=True)
+    renderer = Renderer(window, accelerated=False)
+    try:
+        renderer.logical_size = (4, 4)
+        renderer.scale = (1.25, 1.5)
+        renderer.set_viewport((1, 1, 6, 6))
+        renderer.draw_blend_mode = pygame.BLENDMODE_ADD
+        controls = [list(renderer.logical_size),
+                    [round(axis * 100) for axis in renderer.scale],
+                    list(renderer.get_viewport()), int(renderer.draw_blend_mode)]
+
+        renderer.logical_size = (0, 0)
+        renderer.scale = (1, 1)
+        renderer.set_viewport(None)
+        renderer.draw_blend_mode = pygame.BLENDMODE_NONE
+        target = Texture(renderer, (4, 4), target=True)
+        renderer.target = target
+        renderer.draw_color = (0, 0, 0, 255)
+        renderer.clear()
+        renderer.draw_color = (240, 20, 10, 255)
+        renderer.draw_rect((1, 1, 2, 2))
+        target_pixels = pixel_colors(renderer.to_surface())
+
+        renderer.target = None
+        renderer.draw_color = (0, 40, 0, 255)
+        renderer.clear()
+        window_pixel = list(renderer.to_surface().get_at((0, 0)))
+        return [controls, target_pixels, window_pixel]
+    finally:
+        renderer.target = None
+        del target
+        del renderer
+        window.destroy()
+
+
+def sdl2_texture_partial_update():
+    from pygame._sdl2 import Window, Renderer, Texture
+    window = Window("texture update fixture", size=(6, 4), hidden=True)
+    renderer = Renderer(window, accelerated=False)
+    try:
+        base = pygame.Surface((3, 2), pygame.SRCALPHA, 32)
+        base.fill((0, 0, 40, 255))
+        texture = Texture.from_surface(renderer, base)
+        patch = pygame.Surface((2, 1), pygame.SRCALPHA, 32)
+        patch.set_at((0, 0), (240, 20, 10, 255))
+        patch.set_at((1, 0), (10, 220, 30, 255))
+        texture.update(patch, area=(1, 1, 2, 1))
+        renderer.draw_color = (0, 0, 0, 255)
+        renderer.clear()
+        texture.draw(dstrect=(1, 1, 3, 2))
+        return pixel_colors(renderer.to_surface())
+    finally:
+        del texture
+        del renderer
+        window.destroy()
+
+
+def sdl2_texture_rotation_origin():
+    from pygame._sdl2 import Window, Renderer, Texture
+    window = Window("texture origin fixture", size=(8, 8), hidden=True)
+    renderer = Renderer(window, accelerated=False)
+    try:
+        source = pygame.Surface((2, 1), pygame.SRCALPHA, 32)
+        source.set_at((0, 0), (255, 0, 0, 255))
+        source.set_at((1, 0), (0, 255, 0, 255))
+        texture = Texture.from_surface(renderer, source)
+        renderer.draw_color = (0, 0, 0, 255)
+        renderer.clear()
+        texture.draw(dstrect=(3, 3, 2, 1), angle=90, origin=(0, 0))
+        image = renderer.to_surface()
+        return [list(image.get_at(point)) for point in [(2, 3), (2, 4), (3, 3)]]
+    finally:
+        del texture
+        del renderer
+        window.destroy()
+
+
+def sdl2_image_nested_rects():
+    from pygame._sdl2 import Window, Renderer, Texture, Image
+    window = Window("nested image rectangles", size=(8, 4), hidden=True)
+    renderer = Renderer(window, accelerated=False)
+    try:
+        source = pygame.Surface((4, 1), pygame.SRCALPHA, 32)
+        texture = Texture.from_surface(renderer, source)
+        atlas = Image(texture)
+        parent = Image(atlas, (1, 0, 3, 1))
+        image = Image(parent, (1, 0, 2, 1))
+        return [list(parent.srcrect), list(image.srcrect),
+                list(image.get_rect(center=(5, 2)))]
+    finally:
+        del image
+        del parent
+        del atlas
+        del texture
+        del renderer
+        window.destroy()
+
+
+def sdl2_image_modulation_pixels():
+    from pygame._sdl2 import Window, Renderer, Texture, Image
+    window = Window("image modulation", size=(8, 3), hidden=True)
+    renderer = Renderer(window, accelerated=False)
+    try:
+        source = pygame.Surface((4, 1), pygame.SRCALPHA, 32)
+        for x, color in enumerate([(200, 10, 20, 255), (20, 200, 30, 255),
+                                   (30, 40, 210, 255), (70, 80, 90, 255)]):
+            source.set_at((x, 0), color)
+        texture = Texture.from_surface(renderer, source)
+        image = Image(Image(texture, (1, 0, 3, 1)), (1, 0, 2, 1))
+        image.color = (255, 128, 255)
+        image.alpha = 128
+        image.blend_mode = pygame.BLEND_ADD
+        renderer.draw_color = (0, 0, 0, 255)
+        renderer.clear()
+        image.draw(dstrect=(3, 1, 2, 1))
+        image.draw(dstrect=(0, 1))
+        pixels = renderer.to_surface()
+        return [[list(pixels.get_at((x, 1))) for x in (0, 1, 3, 4)]]
+    finally:
+        del image
+        del texture
+        del renderer
+        window.destroy()
+
+
+def rle_colorkey_alpha_lock_state():
+    source = pygame.Surface((3, 1), pygame.SRCALPHA, 32)
+    for x, color in enumerate([(200, 10, 20, 255), (255, 0, 255, 255),
+                               (20, 200, 30, 100)]):
+        source.set_at((x, 0), color)
+    source.set_colorkey((255, 0, 255), pygame.RLEACCEL)
+    source.set_alpha(128)
+    target = pygame.Surface((3, 1), pygame.SRCALPHA, 32)
+    target.fill((10, 20, 30, 255))
+    target.blit(source, (0, 0))
+    # Check observable surface state and pixels, never pygame's private flag bits.
+    return [[list(target.get_at((x, 0))) for x in range(3)],
+            list(source.get_colorkey()), source.get_alpha(), int(source.get_locked())]
+
+
 def reference():
     source = pygame.Surface((2, 2), pygame.SRCALPHA, 32)
     for index, pixel in enumerate([
@@ -572,6 +717,9 @@ def reference():
         layered_dirty_clip_repaint(),
         vector_indexing(), vector_swizzles(), surface_buffer_views(),
         padded_surface_views(), controller_event_switch(),
+        sdl2_renderer_targets_and_controls(), sdl2_texture_partial_update(),
+        sdl2_texture_rotation_origin(), sdl2_image_nested_rects(),
+        sdl2_image_modulation_pixels(), rle_colorkey_alpha_lock_state(),
     ]
 
 

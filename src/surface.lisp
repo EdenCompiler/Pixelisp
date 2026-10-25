@@ -21,6 +21,7 @@
 (cffi:defcfun ("SDL_PixelFormatEnumToMasks" %pixel-format-masks) :int
   (format :uint32) (bits :pointer) (r :pointer) (g :pointer) (b :pointer) (a :pointer))
 (cffi:defcfun ("SDL_SetSurfaceBlendMode" %set-blend) :int (surface :pointer) (blend :int))
+(cffi:defcfun ("SDL_SetSurfaceRLE" %set-surface-rle) :int (surface :pointer) (enabled :int))
 (cffi:defcfun ("SDL_GetSurfaceBlendMode" %get-blend) :int (surface :pointer) (blend :pointer))
 (cffi:defcfun ("SDL_SetClipRect" %set-clip) :int (surface :pointer) (rect :pointer))
 (cffi:defcfun ("SDL_FillRect" %fill-rect) :int (surface :pointer) (rect :pointer) (color :uint32))
@@ -50,12 +51,16 @@
    (locks :initform 0 :accessor locks)
    (clip :initarg :clip :accessor clip-rect)
    (alpha :initform 255 :accessor alpha-value)
-   (colorkey :initform nil :accessor colorkey)))
+   (colorkey :initform nil :accessor colorkey)
+   ;; This is the requested hint, as in pygame. SDL may temporarily turn
+   ;; encoding off while pixels are accessed, so do not infer it from flags.
+   (rle-hint :initform nil :accessor rle-hint)))
 (defmethod pixelisp.internal:ensure-live :before ((object surface))
   ;; A subsurface owns only its SDL metadata. Its pixels belong to its parent.
   (when (typep (parent object) 'pixelisp.internal:resource)
     (pixelisp.internal:ensure-live (parent object))))
 (defun check-surface (surface)
+  (check-type surface surface)
   (pixelisp.internal:ensure-live surface)
   surface)
 (defun pixelisp.internal:surface-handle (surface)
@@ -296,7 +301,62 @@ anchors are given, they are applied in caller order; the last wins."
     (when (zerop (decf (locks surface)))
       (pixelisp.internal::%unlock-surface (pixelisp.internal::%ptr (pixelisp.internal:handle surface))))
     (when (typep (parent surface) 'surface) (unlock (parent surface)))) surface)
-(defun locked-p (surface) (plusp (locks surface)))
+(defun locked-p (surface) (check-surface surface) (plusp (locks surface)))
+(defun get-locked (surface) (locked-p surface))
+(defun must-lock-p (surface)
+  "Return whether SDL currently marks SURFACE as requiring a pixel lock."
+  (check-surface surface)
+  ;; SDL_MUSTLOCK is a header macro: (surface->flags & SDL_RLEACCEL) != 0.
+  ;; SDL_RLEACCEL is 0x2 in SDL2. See SDL2/SDL_MUSTLOCK.
+  (not (zerop (logand (plus-c:c-ref (pixelisp.internal:handle surface)
+                                     sdl2-ffi:sdl-surface :flags)
+                      #x2))))
+(defun rle-enabled-p (surface)
+  "Return the requested RLE hint, even while SDL temporarily decodes pixels."
+  (check-surface surface)
+  (rle-hint surface))
+(defun %descendant-surface-p (candidate ancestor)
+  (loop for current = (parent candidate) then (and (typep current 'surface) (parent current))
+        while current
+        thereis (eq current ancestor)))
+(defun %validate-rle-change (surface enabled operation)
+  (check-type enabled boolean)
+  (when (/= (if enabled 1 0) (if (rle-hint surface) 1 0))
+    (when (plusp (locks surface))
+      (error 'pixelisp:resource-in-use :operation operation
+             :message "Close pixel views and unlock the surface before changing RLE."))
+    (when enabled
+      (unless (and (owned-p surface) (null (parent surface))
+                   ;; SDL's PREALLOC flag means pixels are externally owned,
+                   ;; even when Pixelisp owns the SDL_Surface wrapper.
+                   (zerop (logand (plus-c:c-ref (pixelisp.internal:handle surface)
+                                                sdl2-ffi:sdl-surface :flags)
+                                  #x1)))
+        (error 'pixelisp:unsupported-feature :operation operation
+               :message "RLE can only be enabled on an independently owned surface."))
+      (when (some (lambda (candidate)
+                   (and (typep candidate 'surface)
+                        (not (eq candidate surface))
+                        (not (pixelisp.internal:resource-disposed-p candidate))
+                        (%descendant-surface-p candidate surface)))
+                  pixelisp.internal::*resources*)
+        (error 'pixelisp:resource-in-use :operation operation
+               :message "Dispose child subsurfaces before enabling RLE.")))))
+(defun set-rle (surface enabled)
+  "Set SDL's RLE acceleration hint. Return ENABLED after SDL accepts it.
+
+SDL documents that RLE surfaces may need locking before pixel access; the
+requested hint is cached because SDL can temporarily decode a surface. See
+https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE and SDL2/SDL_MUSTLOCK."
+  (check-surface surface)
+  (%validate-rle-change surface enabled 'set-rle)
+  (unless (= (if enabled 1 0) (if (rle-hint surface) 1 0))
+    (when (minusp (pixelisp.internal::%set-surface-rle
+                   (pixelisp.internal::%ptr (pixelisp.internal:handle surface))
+                   (if enabled 1 0)))
+      (pixelisp.internal:native-error 'set-rle))
+    (setf (rle-hint surface) enabled))
+  enabled)
 (defun pixel-pointer (surface x y)
   (cffi:inc-pointer (sdl2:surface-pixels (pixelisp.internal:handle surface))
                     (+ (* y (sdl2:surface-pitch (pixelisp.internal:handle surface))) (* x 4))))
@@ -431,22 +491,33 @@ Pass NIL for RECTANGLE to use the full clip with :SPECIAL-FLAGS. Return damage."
                         (pixelisp.internal::%ptr (sdl2:surface-format (pixelisp.internal:handle surface))) r g b a)))
           (pixelisp.internal:native-error 'fill)))) area))
 (defun get-alpha (surface) (check-surface surface) (alpha-value surface))
-(defun set-alpha (surface alpha)
+(defun set-alpha (surface alpha &key (rle nil rle-p))
+  "Set blanket alpha, optionally changing SDL's RLE acceleration hint.
+The optional :RLE behavior follows pygame's Surface.set_alpha flags argument;
+RLE sources can be faster to blit and slower to modify. See
+https://www.pygame.org/docs/ref/surface.html#pygame.Surface.set_alpha."
   (check-surface surface)
   (when alpha (check-type alpha (unsigned-byte 8)))
-  (setf (alpha-value surface) alpha)
+  (when rle-p (%validate-rle-change surface rle 'set-alpha))
+  (when rle-p (set-rle surface rle))
   (sdl2:set-alpha-mod (pixelisp.internal:handle surface) (or alpha 255))
   (pixelisp.internal::%set-blend (pixelisp.internal::%ptr (pixelisp.internal:handle surface))
-                               (if (or (alpha-p surface) (and alpha (< alpha 255))) 1 0)) alpha)
+                               (if (or (alpha-p surface) (and alpha (< alpha 255))) 1 0))
+  (setf (alpha-value surface) alpha))
 (defun get-colorkey (surface)
   "Return an independent Color for the native transparent key, or NIL."
   (check-surface surface)
   (when (colorkey surface)
     (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba (colorkey surface)))))
-(defun set-colorkey (surface color)
-  "Set a transparent color without retaining mutable caller-owned channel data."
+(defun set-colorkey (surface color &key (rle nil rle-p))
+  "Set a transparent color and optionally SDL's RLE acceleration hint.
+The optional :RLE behavior follows pygame's Surface.set_colorkey flags
+argument; RLE sources can be faster to blit and slower to modify. See
+https://www.pygame.org/docs/ref/surface.html#pygame.Surface.set_colorkey."
   (check-surface surface)
+  (when rle-p (%validate-rle-change surface rle 'set-colorkey))
   (let ((key (when color (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba color)))))
+    (when rle-p (set-rle surface rle))
     (sdl2:set-color-key (pixelisp.internal:handle surface) (if key :true :false)
                        (if key (multiple-value-bind (r g b a) (pixelisp.internal:rgba key)
                                  (pixelisp.internal::%map-rgba
@@ -581,7 +652,8 @@ Use the result with :BLEND-PREMULTIPLIED. This does not mutate the input."
   (check-surface surface)
   (let ((result (make-surface (size surface) :alpha (alpha-p surface))))
     (dotimes (y (height surface)) (dotimes (x (width surface)) (set-at result (list x y) (get-at surface (list x y)))))
-    (set-alpha result (get-alpha surface)) (set-colorkey result (get-colorkey surface)) result))
+    (set-alpha result (get-alpha surface)) (set-colorkey result (get-colorkey surface))
+    (when (rle-enabled-p surface) (set-rle result t)) result))
 (defun convert (surface) (let ((out (make-surface (size surface))))
                     (dotimes (y (height surface)) (dotimes (x (width surface)) (set-at out (list x y) (get-at surface (list x y))))) out))
 (defun convert-alpha (surface)
@@ -590,6 +662,11 @@ Use the result with :BLEND-PREMULTIPLIED. This does not mutate the input."
 (defun subsurface (surface rectangle)
   "Create a shared view with its parent's pixel format and row pitch."
   (check-surface surface)
+  (loop for ancestor = surface then (and (typep ancestor 'surface) (parent ancestor))
+        while (typep ancestor 'surface)
+        when (rle-hint ancestor) do
+          (error 'pixelisp:unsupported-feature :operation 'subsurface
+                 :message "Disable RLE on the owning surface before creating a subsurface."))
   (let* ((r (pixelisp.internal:as-rect rectangle))
          (w (px.rect:width r)) (h (px.rect:height r)))
     (unless (and (plusp w) (plusp h) (px.rect:contains (get-rect surface) r))
