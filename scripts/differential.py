@@ -48,7 +48,44 @@ CASE_NAMES = [
     "premultiplied image bytes", "encoded sound memory", "FreeType independent size axes",
     "encoded image output", "music memory playback", "FreeType retained text and bitmap settings",
     "sprite image crops", "RenderUpdates damage", "float32 sound arrays", "native display mode queries",
+    "encoded font input", "mixer output selection and defaults",
 ]
+
+
+def encoded_font_input():
+    pygame.font.init()
+    data = (ROOT / "assets/fonts/DejaVuSans.ttf").read_bytes()
+    source = BytesIO(data)
+    font = pygame.font.Font(source, 24)
+    text = "Pixelisp hélλo"
+    image = font.render(text, True, "white")
+    result = [list(font.size(text)), list(image.get_size()),
+              [list(glyph) for glyph in font.metrics("Ag")]]
+    del font
+    source.close()
+    return result
+
+
+def mixer_output_selection_and_defaults():
+    from pygame._sdl2.audio import get_audio_device_names
+    # Pygame's mixer owns audio subsystem initialization; enumerate while open,
+    # then reopen on the named output to exercise the selection argument.
+    pygame.mixer.init()
+    device = get_audio_device_names(False)[0]
+    pygame.mixer.quit()
+    try:
+        pygame.mixer.init(frequency=22050, size=-16, channels=1, buffer=300,
+                          devicename=device, allowedchanges=0)
+        result = [list(pygame.mixer.get_init())]
+        pygame.mixer.quit()
+        pygame.mixer.pre_init(frequency=32000, size=-16, channels=2, buffer=300,
+                              allowedchanges=5)
+        pygame.mixer.init(frequency=0, size=0, channels=0, buffer=0, allowedchanges=-1)
+        result.append(list(pygame.mixer.get_init()))
+        return result
+    finally:
+        pygame.mixer.quit()
+        pygame.mixer.pre_init()
 
 
 def sprite_image_crops():
@@ -1059,6 +1096,7 @@ def reference():
         premultiplied_image_bytes(), encoded_sound_memory(), freetype_independent_size_axes(),
         encoded_image_output(), music_memory_playback(), freetype_retained_text(),
         sprite_image_crops(), render_updates_damage(), float32_sound_arrays(), native_display_mode_queries(),
+        encoded_font_input(), mixer_output_selection_and_defaults(),
     ]
 
 

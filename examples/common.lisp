@@ -9,7 +9,7 @@
   screen (width 900) (height 620) (elapsed 0d0) (seed 1)
   (backend :surface) window renderer texture frame-image (fullscreen nil)
   held-keys (mouse-pos (list 450 310)) (audio-enabled nil)
-  (fonts (make-hash-table)) (labels (make-hash-table :test #'equal))
+  font-data (fonts (make-hash-table)) (labels (make-hash-table :test #'equal))
   (tones (make-hash-table :test #'equal)))
 
 (defstruct mini-game
@@ -31,6 +31,22 @@ SNAPSHOT returns ordinary values that remain usable after native cleanup."
 (defun %random-choice (session sequence)
   (elt sequence (%game-random session (length sequence))))
 
+(defun %session-font (session size)
+  "Cache font sizes from one encoded asset, as a packed game would do."
+  (or (gethash size (session-fonts session))
+      (let ((bytes (or (session-font-data session)
+                       (setf (session-font-data session)
+                             (with-open-file (input (px.font:get-default-font)
+                                                    :element-type '(unsigned-byte 8))
+                               (let ((data (make-array (file-length input)
+                                                       :element-type '(unsigned-byte 8))))
+                                 (read-sequence data input)
+                                 data))))))
+        ;; Each font retains its own native copy. The asset vector can be
+        ;; reused, while scoped game cleanup closes all fonts and their streams.
+        (setf (gethash size (session-fonts session))
+              (px.font:load-font-bytes bytes size)))))
+
 (defun %text (session string x y &key (size 18) (color '(225 235 250))
                                     (anchor :top-left))
   "Render a cached label. The bounded cache also handles changing scores."
@@ -41,9 +57,7 @@ SNAPSHOT returns ordinary values that remain usable after native cleanup."
       (when (>= (hash-table-count labels) 256)
         (maphash (lambda (key surface) (declare (ignore key)) (px:dispose surface)) labels)
         (clrhash labels))
-      (let ((font (or (gethash size (session-fonts session))
-                      (setf (gethash size (session-fonts session))
-                            (px.font:make-font nil size)))))
+      (let ((font (%session-font session size)))
         (setf image (px.font:render font string t color)
               (gethash key labels) image)))
     (px.surface:blit (session-screen session) image

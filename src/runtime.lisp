@@ -510,6 +510,9 @@ User IDs at or above #x8000 include their number; unknown types include their va
 (defun %normalize-axis (value)
   "Map SDL's asymmetric signed axis range onto the inclusive interval [-1,1]."
   (/ value (if (minusp value) 32768.0 32767.0)))
+;; Implemented in mouse-events.lisp, loaded after this file because those helpers
+;; depend on %FIELD above and SDL's runtime version API.
+(declaim (ftype function %native-touch-mouse-p %native-wheel-precise))
 (defun %decode-native (native)
   "Copy SDL's transient union into an ordinary Lisp event before polling again."
   (let ((type (sdl2:get-event-type native)))
@@ -523,12 +526,25 @@ User IDs at or above #x8000 include their number; unknown types include their va
       (:mousemotion
        (make-event :mouse-motion :pos (list (%field native :motion :x) (%field native :motion :y))
                    :rel (list (%field native :motion :xrel) (%field native :motion :yrel))
-                   :buttons (%field native :motion :state)))
+                   :buttons (%field native :motion :state)
+                   :which (%field native :motion :which)
+                   :touch (%native-touch-mouse-p (%field native :motion :which))
+                   :window-id (%field native :motion :window-id)))
       ((:mousebuttondown :mousebuttonup)
        (make-event (if (eq type :mousebuttondown) :mouse-button-down :mouse-button-up)
                    :button (%field native :button :button)
-                   :pos (list (%field native :button :x) (%field native :button :y))))
-      (:mousewheel (make-event :mouse-wheel :x (%field native :wheel :x) :y (%field native :wheel :y)))
+                   :pos (list (%field native :button :x) (%field native :button :y))
+                   :which (%field native :button :which)
+                   :touch (%native-touch-mouse-p (%field native :button :which))
+                   :window-id (%field native :button :window-id)))
+      (:mousewheel
+       (let ((precise (%native-wheel-precise native)))
+         (make-event :mouse-wheel :x (%field native :wheel :x) :y (%field native :wheel :y)
+                     :which (%field native :wheel :which)
+                     :touch (%native-touch-mouse-p (%field native :wheel :which))
+                     :window-id (%field native :wheel :window-id)
+                     :flipped (= (%field native :wheel :direction) 1)
+                     :precise-x (first precise) :precise-y (second precise))))
       (:textinput (make-event :text-input :text (%field native :text :text string)))
       (:textediting (make-event :text-editing :text (%field native :edit :text string)
                                :start (%field native :edit :start) :length (%field native :edit :length)))

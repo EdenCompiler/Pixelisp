@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Load SDL_ttf fonts from encoded octet vectors and caller-owned binary streams,
+  retaining private native storage until font cleanup. Mini-game text caches
+  now share encoded font assets.
+- Select mixer output devices and allowed audio-setting changes, including
+  pre-init defaults and pygame-compatible buffer rounding.
+- Copy mouse device/window identity, touch origin, wheel direction and precise
+  scrolling into events, with an older-SDL fallback. Crater Command uses
+  fractional wheel input for power and horizontal aiming.
 - Add copied sprite source rectangles and RenderUpdates groups with old/new
   painted damage, lost/hidden bounds, clear bookkeeping and failed-blit retry
   preservation. Echo Grove now samples pad frames from a shared sprite sheet.

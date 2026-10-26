@@ -46,6 +46,21 @@
           (max 350.0 (min 560.0 (%crater-command-state-power state)))))
   state)
 
+(defun %crater-command-scroll (state event)
+  "Use fractional wheel steps for fine power and horizontal aim adjustments."
+  (when (eq :playing (%crater-command-state-status state))
+    (let ((direction (if (px.event:attribute event :flipped) -1 1)))
+      ;; Integer-only devices and synthetic input use the same controls. Prefer
+      ;; precise deltas when available so small trackpad gestures remain useful.
+      (incf (%crater-command-state-angle state)
+            (* direction 3 (px.event:attribute event :precise-x
+                                              (px.event:attribute event :x 0))))
+      (incf (%crater-command-state-power state)
+            (* direction 12 (px.event:attribute event :precise-y
+                                               (px.event:attribute event :y 0))))
+      (%crater-command-aim state 0 nil nil nil nil)))
+  state)
+
 (defun %crater-command-ground-height (x)
   "Interpolate the visible ground profile for trajectory planning and tests."
   (loop for (left-x left-y) in +crater-command-terrain-profile+
@@ -213,9 +228,11 @@
     (px.draw:circle target-art '(232 255 192) '(17 18) 6)
     (make-mini-game
      :id :crater-command :title "CRATER COMMAND"
-     :instructions "←/→ aim · ↑/↓ power · SPACE fire"
+     :instructions "←/→ aim · ↑/↓ or wheel power · SPACE fire"
      :state state
      :on-event (lambda (current event game-session)
+                 (when (eq :mouse-wheel (px.event:type event))
+                   (%crater-command-scroll current event))
                  (when (and (eq :key-down (px.event:type event))
                             (eq :space (px.event:attribute event :key)))
                    (when (%crater-command-fire current)

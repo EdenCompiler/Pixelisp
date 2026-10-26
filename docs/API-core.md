@@ -355,8 +355,25 @@ names, such as `"KeyDown"` for `:key-down`; custom integers have a
 
 `post` accepts Lisp payloads and is thread-safe. Pumping must stay on the video
 thread. Native key events expose `:key`, `:keycode`, `:scancode`, `:mod`, and
-`:repeat`; mouse events expose positions/relative movement/buttons. Text input
-is UTF-8. Window events contain SDL's numeric sub-event and size. Device events
+`:repeat`; mouse events expose positions/relative movement/buttons. Mouse motion,
+button, and wheel events also carry `:which` (SDL mouse ID), `:window-id`, and
+`:touch` (true for mouse events synthesized from touch input). Motion `:buttons`
+remains SDL's integer button bitmask.
+
+Wheel events retain integer `:x`/`:y` and add single-float `:precise-x`/
+`:precise-y` for fractional scrolling. On SDL versions before 2.0.18, precise
+values are the integer deltas converted to floats. `:flipped` reports SDL's
+scroll direction; the raw deltas are preserved, so an application can choose
+whether to reverse them. These are copied Lisp values and remain valid after
+the next event poll.
+
+```lisp
+(dolist (event (px.event:get :types :mouse-wheel))
+  (let ((direction (if (px.event:attribute event :flipped) -1 1)))
+    (incf zoom (* direction 0.1 (px.event:attribute event :precise-y)))))
+```
+
+Text input is UTF-8. Window events contain SDL's numeric sub-event and size. Device events
 retain SDL-style event names where no Lisp spelling adaptation is documented.
 Joystick hat/ball events expose `:which`, `:hat` or `:ball`, plus `:value` or
 `:rel`; controller touchpad and sensor events copy their coordinates and data

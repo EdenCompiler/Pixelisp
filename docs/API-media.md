@@ -68,7 +68,31 @@ raw imports use the ordinary channel-order names.
 
 ## SDL_ttf fonts
 
-`(px.font:make-font pathname point-size)` opens a font and returns a managed resource. A NIL pathname selects the bundled DejaVu Sans font, with the system sans font as a fallback. `px.font:sys-font` resolves a family name through fontconfig and accepts `:bold` and `:italic`. `px.sysfont` re-exports the system-font lookup functions.
+`(px.font:make-font source point-size)` opens a font and returns a managed resource.
+SOURCE can be a pathname, string path, encoded `(unsigned-byte 8)` vector, or
+binary input stream. NIL selects the bundled DejaVu Sans font, with the system
+sans font as a fallback. `px.font:font` accepts the same sources;
+`load-font-bytes` explicitly requires an encoded octet vector.
+`px.font:sys-font` resolves a family name through fontconfig and accepts `:bold`
+and `:italic`. `px.sysfont` re-exports the system-font lookup functions.
+
+Binary streams are consumed from their current position to EOF and remain
+open. Encoded inputs are copied into native-owned storage because SDL_ttf may
+read glyph data after construction. You may change the original vector or
+close the input stream immediately. Closing the font first closes its native
+font, then its native stream, then releases its encoded bytes. The standard
+path constructor keeps its existing behavior; loading the library opens no
+font or device.
+
+```lisp
+;; Read a packed font asset; keep using FONT after INPUT has closed.
+(let ((font (with-open-file (input "assets/ui.ttf" :element-type '(unsigned-byte 8))
+              (px.font:make-font input 24))))
+  (unwind-protect
+       (px:with-resource (label (px.font:render font "Ready!" t "white"))
+         (px.surface:blit screen label '(20 20)))
+    (px:dispose font)))
+```
 
 Use `size` to measure UTF-8 text, `metrics` to inspect per-character glyph bounds and advance, and `render` to produce a surface. `render` takes an antialias flag and foreground color; an optional background color selects shaded rendering. Empty text returns a transparent surface. Font style accessors include `get-bold`/`set-bold`, `get-italic`/`set-italic`, `get-underline`/`set-underline`, and `get-strikethrough`/`set-strikethrough`. `get-height`, `get-linesize`, `get-ascent`, and `get-descent` expose font metrics.
 
@@ -86,7 +110,39 @@ Fonts are native resources: use `px:dispose` or `px.font:close`, or place them i
 
 ## Mixer and music
 
-Call `px.mixer:init` before loading or playing sounds. It opens SDL_mixer's shared audio device and accepts `:frequency`, `:size`, `:channels`, and `:buffer`; supported sample sizes are 8, -8, 16, -16, -32, and 32 bits. Positive 32 selects native-endian float32 samples; -32 retains signed integer PCM32. `pre-init` stores defaults for the next initialization, while `get-init` returns the active frequency, sample format, and channel count.
+Call `px.mixer:init` before loading or playing sounds. It opens SDL_mixer's shared
+audio device and accepts `:frequency`, `:size`, `:channels`, `:buffer`,
+`:device-name`, and `:allowed-changes`. Supported sample sizes are 8, -8, 16,
+-16, -32, and 32 bits. Positive 32 selects native-endian float32 samples; -32
+retains signed integer PCM32. `pre-init` stores defaults for the next
+initialization, while `get-init` returns the actual active frequency, sample
+format, and channel count as three values.
+
+`:device-name` is an SDL output-device name or NIL for the default output.
+`px.sdl2.audio:devices` enumerates output names without opening a device.
+`:allowed-changes` controls how SDL may adapt the requested settings. Pass a
+list of `:frequency`, `:format`, `:channels`, and/or `:samples`, or their SDL
+integer bitmask (1, 2, 4, and 8 respectively). The default is frequency and
+channel changes (5). NIL or 0 requests the specified format; SDL can still
+convert internally to a hardware format. Actual availability depends on the
+audio backend. Buffer sizes round up to a power of two, with a 256-frame minimum.
+
+Numeric zero for frequency, size, channels, or buffer uses the stored
+`pre-init` default. For change flags, -1 uses the stored default and 0 remains
+strict. `pre-init` itself resets omitted settings to the library defaults.
+An already-open mixer retains its settings until `quit`; reinitializing it
+does not switch outputs. Failed opening leaves it closed and available for a
+later attempt.
+
+```lisp
+;; Use an enumerated output or NIL for the system default.
+(px.mixer:pre-init :frequency 22050 :size -16 :channels 1
+                   :buffer 300 :device-name (first (px.sdl2.audio:devices))
+                   :allowed-changes '(:frequency :channels))
+(px.mixer:init) ; Requests a 512-frame buffer after rounding.
+(multiple-value-bind (frequency format channels) (px.mixer:get-init)
+  (format t "~D Hz, ~D-bit format, ~D channels~%" frequency format channels))
+```
 
 For a float32 mixer, copied arrays and live `px.sndarray:samples` views use
 specialized `single-float` elements. Mono data uses a frame vector; multichannel

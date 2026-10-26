@@ -14,7 +14,7 @@ updates only while active, and draws a common pause or end-state overlay.
 | --- | --- | --- |
 | **Prism Breaker** | Clear all 60 prisms. Move the paddle with the mouse or Left/Right; press Space to serve. Three missed balls end the run. | Rect collisions and vector reflection drive wall, paddle, and brick bounces. Combos increase the score; generated tones mark serves, impacts, and lost balls. Cached surfaces keep brick and ball rendering on native blits. |
 | **Orbit Patrol** | Turn with Left/Right or A/D, thrust with Up/W, and fire with Space. Destroy 12 targets while avoiding contact. | A rotating ship moves under vector-based thrust and inertia. Projectiles, target collisions, lives, and short invulnerability windows create the arcade challenge; sound gives feedback for shots and hits. |
-| **Crater Command** | Aim with Left/Right, adjust shell power with Up/Down, and fire with Space. Destroy three reactors before running out of shells. | Shells follow a ballistic arc over a deformable landscape. Impacts remove terrain pixels and collision-mask bits together, so craters affect later shots. Generated impact tones reinforce hits. |
+| **Crater Command** | Aim with Left/Right or horizontal scrolling, adjust shell power with Up/Down or vertical scrolling, and fire with Space. Destroy three reactors before running out of shells. | Shells follow a ballistic arc over a deformable landscape. Fractional trackpad deltas allow fine aim and power changes. Impacts remove terrain pixels and collision-mask bits together, so craters affect later shots. Generated impact tones reinforce hits. |
 | **Echo Grove** | Watch and listen to a four-pad sequence, then repeat it with keys 1–4, the arrow keys, or mouse clicks. Reach six rounds before losing three mistake lives. | The sequence grows one note at a time. Each pad has an always-visible color cue and an optional generated tone, so the game remains playable with audio disabled. |
 
 The games demonstrate library features through their mechanics: Prism Breaker
@@ -31,6 +31,10 @@ without a native window.
 Orbit Patrol unpacks its thrust velocity with `px.math:swizzle`. Crater Command
 erases terrain alpha through `px.surface:get-view` while updating the collision
 mask, so the shared view directly changes the next shot's path.
+Crater Command reads precise wheel deltas and accounts for flipped scrolling;
+integer-only mouse wheels use the same controls. Every game shares encoded
+font data across its cached text sizes, loading each font from memory rather
+than reopening its asset path for each size.
 
 ## Command line
 

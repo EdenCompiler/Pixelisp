@@ -101,3 +101,33 @@
       (is (= 0 (px.examples::%crater-command-target-count state)))
       (is (= 9 (px.examples::%crater-command-state-ammo state)))
       (is (>= (px.examples::%crater-command-state-score state) 300)))))
+
+(test crater-command-wheel-controls-change-the-next-shot
+  (px:with-init ()
+    (let* ((session (px.examples::make-game-session))
+           (game (px.examples::make-crater-command session))
+           (state (px.examples::mini-game-state game))
+           (on-event (px.examples::mini-game-on-event game)))
+      (funcall on-event state
+               (px.event:make-event :mouse-wheel :x 1 :y 1
+                                    :precise-x 0.5 :precise-y 0.25) session)
+      (is (= 49.5 (px.examples::%crater-command-state-angle state)))
+      (is (= 443.0 (px.examples::%crater-command-state-power state)))
+      (funcall on-event state
+               (px.event:make-event :mouse-wheel :x 1 :y 1
+                                    :precise-x 0.5 :precise-y 0.25 :flipped t) session)
+      (is (= 48.0 (px.examples::%crater-command-state-angle state)))
+      (is (= 440.0 (px.examples::%crater-command-state-power state)))
+      ;; An integer wheel follows the same path and clamps at the aim limits.
+      (funcall on-event state (px.event:make-event :mouse-wheel :x 100 :y -100) session)
+      (is (= 78.0 (px.examples::%crater-command-state-angle state)))
+      (is (= 350.0 (px.examples::%crater-command-state-power state)))
+      (funcall on-event state (px.event:make-event :key-down :key :space) session)
+      (let ((shot (px.examples::%crater-command-state-projectile state)))
+        (is (plusp (getf shot :vx)))
+        (is (minusp (getf shot :vy)))
+        (is (< (abs (- 350 (sqrt (+ (expt (getf shot :vx) 2)
+                                      (expt (getf shot :vy) 2))))) 0.001)))
+      (setf (px.examples::%crater-command-state-status state) :won)
+      (funcall on-event state (px.event:make-event :mouse-wheel :y 1) session)
+      (is (= 350.0 (px.examples::%crater-command-state-power state))))))

@@ -6,6 +6,7 @@
 (defpackage #:pixelisp.font
   (:use #:cl) (:nicknames #:px.font) (:shadow #:get #:get-error #:close)
   (:export #:init #:quit #:get-init #:font #:make-font #:sys-font #:sysfont
+           #:load-font-bytes
            #:get-fonts #:match-font #:get-default-font #:render #:size #:metrics
            #:get-height #:get-linesize #:get-ascent #:get-descent
            #:set-script
@@ -232,7 +233,11 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
 
 (in-package #:pixelisp.font)
 (defclass font (pixelisp.internal:resource)
-  ((path :initarg :path :reader %path) (point-size :initarg :point-size :reader %point-size)))
+  ((path :initarg :path :reader %path) (point-size :initarg :point-size :reader %point-size)
+   ;; SDL_ttf may continue reading the RWops after TTF_OpenFontRW returns.
+   ;; Memory-backed fonts therefore own both objects until disposal.
+   (rwops :initarg :rwops :initform nil :accessor %font-rwops)
+   (memory :initarg :memory :initform nil :accessor %font-memory)))
 (cffi:defcfun ("TTF_GetFontStyle" %style) :int (font :pointer))
 (cffi:defcfun ("TTF_SetFontStyle" %set-style) :void (font :pointer) (style :int))
 (cffi:defcfun ("TTF_FontHeight" %height) :int (font :pointer))
@@ -277,9 +282,14 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
 (defun get-fonts ()
   (let ((output (%fontconfig "fc-list" (list "-f" (format nil "%{family}~%")))))
     (remove-duplicates (mapcar #'string-downcase (uiop:split-string (or output "") :separator '(#\Newline))) :test #'string=)))
+(declaim (ftype function %make-font-from-source)) ; Implemented in FONT-MEMORY.
 (defun make-font (&optional filename (point-size 16))
-  "Open a TrueType/OpenType font, or the system sans font when FILENAME is NIL."
+  "Open a font from a path, encoded octets or binary stream; NIL selects the bundled font."
   (check-type point-size (integer 1 *))
+  (when (> point-size #x7fffffff)
+    (error 'pixelisp:error :operation 'make-font :message "Font point size exceeds SDL's supported integer range"))
+  (when (or (typep filename '(vector (unsigned-byte 8))) (streamp filename))
+    (return-from make-font (%make-font-from-source filename point-size)))
   (init)
   (let* ((path (or filename (get-default-font)))
          (native (sdl2-ttf:open-font path point-size))
@@ -297,7 +307,10 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
   (let ((font (make-font (or (match-font name :bold bold :italic italic) (get-default-font)) point-size)))
     (set-bold font bold) (set-italic font italic) font))
 (setf (fdefinition 'sysfont) #'sys-font)
-(defun %ptr (font) (pixelisp.internal:ensure-live font) (pixelisp.internal:%ptr (pixelisp.internal:handle font)))
+(defun %ptr (font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (pixelisp.internal:%ptr (pixelisp.internal:handle font)))
 (defun %valid-script-name-p (script)
   (and (stringp script) (= (length script) 4)
        (every (lambda (character)
@@ -333,7 +346,13 @@ available after script selection. Return SCRIPT on success."
     script))
 (defmethod pixelisp.internal:dispose ((font font))
   (unless (pixelisp.internal:resource-disposed-p font)
-    (sdl2-ttf:close-font (pixelisp.internal:handle font))))
+    (unwind-protect
+         (sdl2-ttf:close-font (pixelisp.internal:handle font))
+      (when (and (%font-rwops font) (not (cffi:null-pointer-p (%font-rwops font))))
+        (pixelisp.image::%rw-close (%font-rwops font)))
+      (when (%font-memory font)
+        (cffi:foreign-free (%font-memory font)))
+      (setf (%font-rwops font) nil (%font-memory font) nil))))
 (defun close (font) (pixelisp.internal:dispose font))
 (defun size (font text) (%ptr font) (sdl2-ttf:size-utf8 (pixelisp.internal:handle font) text))
 (defun render (font text antialias color &optional background)
@@ -369,7 +388,9 @@ available after script selection. Return SCRIPT on success."
 
 (in-package #:pixelisp.mixer)
 (cffi:defcstruct %chunk (allocated :int) (abuf :pointer) (alen :uint32) (volume :uint8))
-(cffi:defcfun ("Mix_OpenAudio" %open-audio) :int (frequency :int) (format :uint16) (channels :int) (chunksize :int))
+(cffi:defcfun ("Mix_OpenAudioDevice" %open-audio-device) :int
+  (frequency :int) (format :uint16) (channels :int) (chunksize :int)
+  (device :string) (allowed-changes :int))
 (cffi:defcfun ("Mix_CloseAudio" %close-audio) :void)
 (cffi:defcfun ("Mix_QuerySpec" %query) :int (frequency :pointer) (format :pointer) (channels :pointer))
 (cffi:defcfun ("Mix_LoadWAV_RW" %load-wav) :pointer (source :pointer) (free :int))
@@ -391,7 +412,13 @@ available after script selection. Return SCRIPT on success."
 (cffi:defcfun ("Mix_FadeOutChannel" %fadeout) :int (channel :int) (ms :int))
 (cffi:defcfun ("Mix_AllocateChannels" %allocate) :int (number :int))
 (cffi:defcfun ("Mix_ReserveChannels" %reserve) :int (number :int))
-(defvar *settings* '(44100 -16 2 512))
+(defconstant +default-frequency+ 44100)
+(defconstant +default-size+ -16)
+(defconstant +default-channels+ 2)
+(defconstant +default-buffer+ 512)
+(defconstant +default-allowed-changes+ 5) ; frequency | channels
+(defvar *settings* (list +default-frequency+ +default-size+ +default-channels+
+                         +default-buffer+ nil +default-allowed-changes+))
 (defun %audio-format (size)
   ;; SDL's float format includes sign and byte-order bits. Positive SIZE 32
   ;; chooses native-endian float samples; negative 32 remains integer PCM.
@@ -425,23 +452,72 @@ available after script selection. Return SCRIPT on success."
     (unless (< id (get-num-channels))
       (error 'pixelisp:error :operation 'channel :message "The mixer channel is no longer available"))
     id))
-(defun pre-init (&key (frequency 44100) (size -16) (channels 2) (buffer 512))
-  (setf *settings* (list frequency size channels buffer)))
-(defun init (&key (frequency (first *settings*)) (size (second *settings*))
-                  (channels (third *settings*)) (buffer (fourth *settings*)))
-  (check-type frequency (integer 1 *))
+(defun %allowed-changes (value &optional (fallback +default-allowed-changes+))
+  "Translate SDL audio change keywords or a raw SDL bitmask to SDL's flags."
+  (cond
+    ((and (integerp value) (<= 0 value 15)) value)
+    ((and (integerp value) (= value -1)) fallback)
+    ((and (listp value) (integerp (ignore-errors (list-length value)))
+          (every (lambda (flag) (member flag '(:frequency :format :channels :samples))) value))
+     (reduce #'logior value :key (lambda (flag)
+                                  (ecase flag (:frequency 1) (:format 2)
+                                    (:channels 4) (:samples 8)))
+             :initial-value 0))
+    (t (error 'pixelisp:error :operation 'init
+              :message "ALLOWED-CHANGES must be an SDL flag integer (0..15), -1, or a list of :FREQUENCY, :FORMAT, :CHANNELS and :SAMPLES."))))
+(defun %validate-settings (frequency size channels buffer device allowed-changes operation
+                           &optional default-frequency default-size default-channels default-buffer
+                             (default-allowed +default-allowed-changes+))
+  ;; Pygame treats zero as “use the startup default” for numeric settings.
+  (when (eql frequency 0) (setf frequency (or default-frequency +default-frequency+)))
+  (when (eql size 0) (setf size (or default-size +default-size+)))
+  (when (eql channels 0) (setf channels (or default-channels +default-channels+)))
+  (when (eql buffer 0) (setf buffer (or default-buffer +default-buffer+)))
+  (check-type frequency (integer 1 #x7fffffff))
+  (unless (member size '(8 -8 16 -16 -32 32))
+    (error 'pixelisp:unsupported-feature :operation operation
+           :message "Mixer sample size must be 8, -8, 16, -16, -32 or 32"))
   (check-type channels (integer 1 8))
-  (check-type buffer (integer 1 *))
-  (let ((opening (not (get-init))))
-    (when opening
-      (let ((format (%audio-format size)))
-        (when (minusp (%open-audio frequency format channels buffer))
-          (error 'pixelisp:initialization-error :operation 'init :message (pixelisp.image::%sdl-error)))))
-      ;; SDL_mixer allocates fresh channels after shutdown, initially with no events.
+  ;; pygame rounds chunk size up to a power of two, with a 256-frame minimum.
+  ;; Cap at 2^30 so the rounded value still fits SDL's signed int parameter.
+  (check-type buffer (integer 1 #x40000000))
+  (setf buffer (max 256 (loop for rounded = 1 then (* rounded 2)
+                              when (>= rounded buffer) return rounded)))
+  (when device
+    (check-type device string)
+    (when (find #\Null device)
+      (error 'pixelisp:error :operation operation
+             :message "Audio device names cannot contain a NUL character.")))
+  (values frequency size channels buffer device (%allowed-changes allowed-changes default-allowed)))
+(defun pre-init (&key (frequency +default-frequency+) (size +default-size+)
+                      (channels +default-channels+) (buffer +default-buffer+)
+                      (device-name nil) (allowed-changes +default-allowed-changes+))
+  "Set startup mixer settings. ALLOWED-CHANGES accepts SDL flag keywords or a bitmask; 0 is strict."
+  (multiple-value-bind (frequency size channels buffer device allowed)
+      (%validate-settings frequency size channels buffer device-name allowed-changes 'pre-init
+                          +default-frequency+ +default-size+ +default-channels+ +default-buffer+
+                          +default-allowed-changes+)
+    (setf *settings* (list frequency size channels buffer device allowed)))
+  nil)
+(defun init (&key (frequency (first *settings*)) (size (second *settings*))
+                  (channels (third *settings*)) (buffer (fourth *settings*))
+                  (device-name (fifth *settings*)) (allowed-changes (sixth *settings*)))
+  "Initialize audio. DEVICE-NAME selects an SDL output; ALLOWED-CHANGES accepts a keyword list or SDL bitmask (0 means exact settings)."
+  (multiple-value-bind (frequency size channels buffer device allowed)
+      (%validate-settings frequency size channels buffer device-name allowed-changes 'init
+                          (first *settings*) (second *settings*) (third *settings*) (fourth *settings*)
+                          (sixth *settings*))
+    (let ((opening (not (get-init))))
       (when opening
+        (let ((format (%audio-format size)))
+          (when (minusp (%open-audio-device frequency format channels buffer
+                                           (or device (cffi:null-pointer)) allowed))
+            (error 'pixelisp:initialization-error :operation 'init
+                   :message (pixelisp.image::%sdl-error))))
+        ;; SDL_mixer allocates fresh channels after shutdown, initially with no events.
         (clrhash *channel-endevents*)
-        (setf *pending-channel-events* nil *queue-ready* nil)))
-  t)
+        (setf *pending-channel-events* nil *queue-ready* nil))
+      t)))
 (defun get-init ()
   (cffi:with-foreign-objects ((frequency :int) (format :uint16) (channels :int))
     (when (plusp (%query frequency format channels))

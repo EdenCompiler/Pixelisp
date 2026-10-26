@@ -30,6 +30,24 @@
       (is (not (getf snapshot :audio)))
       (is (%clean-run-p)))))
 
+(test gameplay-labels-share-encoded-font-data-and-reuse-fonts
+  (px:with-init ()
+    (let* ((screen (px.surface:make-surface '(160 50) :alpha t))
+           (session (px.examples::make-game-session :screen screen))
+           (first-font (px.examples::%session-font session 18))
+           (data (px.examples::session-font-data session)))
+      (is (typep data '(vector (unsigned-byte 8))))
+      (is (eq first-font (px.examples::%session-font session 18)))
+      (let ((other-font (px.examples::%session-font session 24)))
+        (is (not (eq first-font other-font)))
+        (is (eq data (px.examples::session-font-data session))))
+      ;; Glyphs can still be loaded after the game reuses its packed asset data.
+      (fill data 0)
+      (px.examples::%text session "Score: 250" 0 0)
+      (is (plusp (px.rect:width (px.surface:get-bounding-rect screen))))
+      (is (= 2 (hash-table-count (px.examples::session-fonts session))))))
+  (is (%clean-run-p)))
+
 (test synthesized-melody-plays-with-dummy-audio
   (let ((snapshot (px.examples:run-example "echo-grove" :frames 20 :fps 0
                                           :fixed-dt 0.05d0 :audio t)))

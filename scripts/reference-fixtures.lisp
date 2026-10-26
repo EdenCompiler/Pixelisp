@@ -819,6 +819,34 @@
     (px.display:set-mode '(0 0))
     (list modes (px.surface:size (px.display:get-surface)) (if (px.display:get-active) 1 0))))
 
+(defun fixture-encoded-font-input ()
+  (let ((bytes (with-open-file (input (asdf:system-relative-pathname
+                                       "pixelisp" "assets/fonts/DejaVuSans.ttf")
+                                     :element-type '(unsigned-byte 8))
+                 (let ((data (make-array (file-length input) :element-type '(unsigned-byte 8))))
+                   (read-sequence data input)
+                   data)))
+        (text "Pixelisp hélλo"))
+    (px:with-resource (font (px.font:load-font-bytes bytes 24))
+      (px:with-resource (image (px.font:render font text t "white"))
+        (list (multiple-value-list (px.font:size font text))
+              (px.surface:size image) (px.font:metrics font "Ag"))))))
+
+(defun fixture-mixer-output-selection-and-defaults ()
+  (px.mixer:quit)
+  (let ((px.mixer::*settings* (copy-list px.mixer::*settings*)))
+    (unwind-protect
+         (progn
+           (px.mixer:init :frequency 22050 :size -16 :channels 1 :buffer 300
+                          :device-name (first (px.sdl2.audio:devices)) :allowed-changes 0)
+           (let ((first (multiple-value-list (px.mixer:get-init))))
+             (px.mixer:quit)
+             (px.mixer:pre-init :frequency 32000 :size -16 :channels 2 :buffer 300
+                                :allowed-changes '(:frequency :channels))
+             (px.mixer:init :frequency 0 :size 0 :channels 0 :buffer 0 :allowed-changes -1)
+             (list first (multiple-value-list (px.mixer:get-init)))))
+      (px.mixer:quit))))
+
 (defun fixture-data ()
   (px.surface:with-surface (source '(2 2) :alpha t)
     (loop for pixel in '((10 2 3 127) (20 5 6 128) (30 8 9 255) (40 11 12 0))
@@ -894,7 +922,8 @@
              (fixture-encoded-image-output) (fixture-music-memory-playback)
              (fixture-freetype-retained-text)
              (fixture-sprite-image-crops) (fixture-render-updates-damage)
-             (fixture-float32-sound-arrays) (fixture-native-display-mode-queries))))))))
+             (fixture-float32-sound-arrays) (fixture-native-display-mode-queries)
+             (fixture-encoded-font-input) (fixture-mixer-output-selection-and-defaults))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

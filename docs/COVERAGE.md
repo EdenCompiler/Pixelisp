@@ -20,7 +20,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
 | `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
 | `transform` | `px.transform` | Flip, scaling, smooth scaling, rotation/rotozoom, scale2x, chop, color operations, thresholding, Laplacian edges |
-| `event` | `px.event` | Native event copying, include/exclude retrieval with optional pumping, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
+| `event` | `px.event` | Native event copying including mouse device/window identity, touch origin and precise wheel deltas; include/exclude retrieval with optional pumping, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
 | `key` | `px.key` | Scancode state, keyword names, modifiers, focus, text-input controls and configurable pump-delivered native key repeat |
 | `mouse` | `px.mouse` | Position, relative movement, buttons, visibility, focus, relative mode |
 | `cursors`, `Cursor` | `px.cursors` | System/color/bitmap cursors and ASCII bitmap compilation |
@@ -31,10 +31,10 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `math`, `Vector2`, `Vector3` | `px.math` | Vector arithmetic, indexed components and swizzles with validated writes, updates, length scaling, geometry, scalar/vector interpolation, decimal rounding, bounded movement, degree/radian rotations, scalar clamp and polar/spherical conversion |
 | `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
 | `sprite` | `px.sprite` | CLOS sprites, source-image crops, single/ordered/RenderUpdates/layered/dirty groups, membership/update, old/new damage tracking and retry preservation, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
-| `font`, `sysfont` | `px.font`, `px.sysfont` | UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
+| `font`, `sysfont` | `px.font`, `px.sysfont` | Fonts loaded from paths, encoded octets or binary streams with retained native storage; UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
 | `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
-| `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
+| `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Output-device selection and allowed-setting negotiation; sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
 | `sndarray` | `px.sndarray` | Integer PCM and float32 copied sample arrays/live views, sound creation from arrays |
 | `surfarray` | `px.surfarray` | Packed/RGB/channel copies and views, array-to-surface operations |
@@ -142,6 +142,12 @@ The exported Lisp symbols and module API guides describe the actual interface.
   large Lisp streams are materialized before native playback. TGA output uses
   uncompressed raw BGR/BGRA pixels; pygame can use RLE and encode transparency
   differently. PNG/JPEG/BMP memory encoding uses the optional native bridge.
+- Font byte inputs retain a private native copy and SDL stream until font
+  disposal. Caller streams remain open and may be closed immediately after
+  construction. Direct FreeType/ftfont constructors still accept paths only.
+  Mixer change flags accept Lisp keyword lists or SDL bitmasks; `:device-name`
+  corresponds to pygame's `devicename`. Wheel fields use hyphenated keywords,
+  and window references are integer SDL IDs rather than pygame window objects.
 - Python-only implementation modules are mapped to these Lisp capabilities;
   their internal import names are not duplicated as standalone packages.
 
@@ -168,6 +174,13 @@ multi-monitor physical placement still depends on the connected SDL backend.
 Sprite tests cover crop painting, old/new damage, clear/removal bookkeeping and
 failed-blit retries. Float32 audio tests cover copies, live strides, PCM decode
 conversion, dummy playback, invalid writes and repeated shutdown.
+Memory-font tests cover rendering after source mutation/closure, stream offsets,
+registration failure cleanup and repeated shutdown. Mixer-device tests cover
+enumerated dummy outputs, strict/negotiated settings, defaults, buffer rounding,
+invalid flags and failed-open recovery. Mouse-event tests populate native SDL
+unions and queue events to check copied precision, direction, touch origin and
+window IDs, plus the older-SDL precision fallback. Gameplay tests check wheel
+input changes Crater Command's next shot and packed fonts back cached labels.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
 The retained-text fixture compares immediate reuse. The local pygame build's
