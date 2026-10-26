@@ -392,6 +392,16 @@ available after script selection. Return SCRIPT on success."
 (cffi:defcfun ("Mix_AllocateChannels" %allocate) :int (number :int))
 (cffi:defcfun ("Mix_ReserveChannels" %reserve) :int (number :int))
 (defvar *settings* '(44100 -16 2 512))
+(defun %audio-format (size)
+  ;; SDL's float format includes sign and byte-order bits. Positive SIZE 32
+  ;; chooses native-endian float samples; negative 32 remains integer PCM.
+  (case size (8 #x0008) (-8 #x8008) (16 #x0010) (-16 #x8010)
+    (-32 #x8020)
+    (32 (if (member :little-endian *features*) #x8120 #x9120))
+    (otherwise (error 'pixelisp:unsupported-feature :operation 'init
+                       :message "Mixer sample size must be 8, -8, 16, -16, -32 or 32"))))
+(defun %float-format-p (format)
+  (member format '(#x8120 #x9120)))
 (defvar *channel-sounds* (make-hash-table))
 (defvar *queued-sounds* (make-hash-table))
 ;; Configured per-channel event types and explicit stops awaiting the next pump.
@@ -424,8 +434,7 @@ available after script selection. Return SCRIPT on success."
   (check-type buffer (integer 1 *))
   (let ((opening (not (get-init))))
     (when opening
-      (let ((format (case size (8 #x0008) (-8 #x8008) (16 #x0010) (-16 #x8010) (-32 #x8020)
-                      (otherwise (error 'pixelisp:unsupported-feature :operation 'init :message "Mixer sample size must be 8, -8, 16, -16 or -32")))))
+      (let ((format (%audio-format size)))
         (when (minusp (%open-audio frequency format channels buffer))
           (error 'pixelisp:initialization-error :operation 'init :message (pixelisp.image::%sdl-error)))))
       ;; SDL_mixer allocates fresh channels after shutdown, initially with no events.
@@ -438,7 +447,8 @@ available after script selection. Return SCRIPT on success."
     (when (plusp (%query frequency format channels))
       (let ((f (cffi:mem-ref format :uint16)))
         (values (cffi:mem-ref frequency :int)
-                (* (if (logtest #x8000 f) -1 1) (logand f #xff))
+                (if (%float-format-p f) 32
+                    (* (if (logtest #x8000 f) -1 1) (logand f #xff)))
                 (cffi:mem-ref channels :int))))))
 (defun quit ()
   ;; Native capture must detach before SDL_mixer closes its audio device.
@@ -459,9 +469,16 @@ available after script selection. Return SCRIPT on success."
 (defun %need-init () (unless (get-init) (init)))
 (defun get-sdl-mixer-version () (sdl2-mixer:linked-version))
 (defun sound-element-type (sound)
-  (list (if (minusp (sample-format sound)) 'signed-byte 'unsigned-byte) (abs (sample-format sound))))
+  (if (= (sample-format sound) 32) 'single-float
+      (list (if (minusp (sample-format sound)) 'signed-byte 'unsigned-byte) (abs (sample-format sound)))))
 (defun %sample-cffi (sound)
-  (ecase (sample-format sound) (8 :uint8) (-8 :int8) (16 :uint16) (-16 :int16) (-32 :int32)))
+  (ecase (sample-format sound) (8 :uint8) (-8 :int8) (16 :uint16) (-16 :int16) (-32 :int32) (32 :float)))
+(defun %check-sample-value (format value)
+  ;; Lisp stores native SDL float samples as SINGLE-FLOAT. Their normalized
+  ;; playback range is conventionally [-1, 1], but pygame preserves values
+  ;; outside it, so do not clamp or reject them here.
+  (when (= format 32) (check-type value single-float))
+  value)
 (defun %sound-pointer (sound)
   (pixelisp.internal:ensure-live sound) (pixelisp.internal:handle sound))
 (defun %sample-data (sound)
@@ -519,7 +536,10 @@ available after script selection. Return SCRIPT on success."
         (cffi:foreign-free memory)))))
 
 (defun make-sound (&optional filename &key array buffer file)
-  "Load a sound file, decode encoded :FILE data, copy ARRAY samples, or copy raw :BUFFER PCM."
+  "Load a sound file, decode encoded :FILE data, copy ARRAY samples, or copy raw :BUFFER PCM.
+For a float32 mixer, ARRAY samples must be SINGLE-FLOAT values. The conventional
+normalized range is [-1, 1], but values outside it are preserved. Raw :BUFFER
+octets are copied unchanged."
   ;; Complete source validation before opening the mixer or allocating native memory.
   (let ((sources (count-if #'identity (list filename array buffer file))))
     (unless (= sources 1)
@@ -544,7 +564,7 @@ available after script selection. Return SCRIPT on success."
   (when (typep file '(vector (unsigned-byte 8))) (setf file (copy-seq file)))
   (%need-init)
   (multiple-value-bind (frequency format channels) (get-init)
-    (let* ((ctype (ecase format (8 :uint8) (-8 :int8) (16 :uint16) (-16 :int16) (-32 :int32)))
+    (let* ((ctype (ecase format (8 :uint8) (-8 :int8) (16 :uint16) (-16 :int16) (-32 :int32) (32 :float)))
            (sample-bytes (cffi:foreign-type-size ctype))
            (bytes (cond (array (* (array-total-size array) sample-bytes))
                         (buffer (length buffer))))
@@ -553,6 +573,12 @@ available after script selection. Return SCRIPT on success."
         (unless (if (= channels 1) (= (array-rank array) 1)
                     (and (= (array-rank array) 2) (= (array-dimension array 1) channels)))
           (error 'pixelisp:error :operation 'make-sound :message "Array shape must match mixer channels"))
+        (when (and (= format 32)
+                   (not (subtypep (array-element-type array) 'single-float)))
+          (error 'type-error :datum array :expected-type '(array single-float)))
+        (when (= format 32)
+          (dotimes (i (array-total-size array))
+            (%check-sample-value format (row-major-aref array i))))
         (when (zerop (array-total-size array))
           (error 'pixelisp:error :operation 'make-sound :message "A sound must contain at least one sample")))
       (when (and bytes (zerop bytes))
@@ -756,6 +782,7 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
   (cffi:mem-aref (%sample-data sound) (%sample-cffi sound) (+ (* frame (sound-channels sound)) channel)))
 (defun sound-sample-set (sound value frame &optional (channel 0))
   (sound-sample-ref sound frame channel)
+  (%check-sample-value (sample-format sound) value)
   (setf (cffi:mem-aref (%sample-data sound) (%sample-cffi sound) (+ (* frame (sound-channels sound)) channel)) value))
 (defmethod pixelisp.internal:dispose ((sound sound))
   (unless (pixelisp.internal:resource-disposed-p sound)

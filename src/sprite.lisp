@@ -12,6 +12,7 @@
   (:shadow #:remove #:clear)
   (:export #:sprite #:dirty-sprite #:group #:group-single #:ordered-group #:layered-group #:layered-dirty-group
            #:make-sprite #:make-dirty-sprite #:make-group #:make-group-single #:single-sprite #:make-ordered-group
+           #:render-updates-group #:make-render-updates-group #:source-rect
            #:make-layered-group #:make-layered-dirty-group #:image #:rect #:mask
            #:layer #:visible-p #:dirty #:blend-flags #:radius #:groups #:alive-p #:kill
            #:add #:remove #:empty #:sprites #:has-p #:update #:draw #:clear
@@ -35,7 +36,8 @@
    (layer :initarg :layer :initform 0 :accessor layer)
    (visible :initarg :visible :initform t :accessor visible-p)
    (dirty :initarg :dirty :initform 1 :accessor dirty)
-   (blend-flags :initarg :blend-flags :initform nil :accessor blend-flags)))
+   (blend-flags :initarg :blend-flags :initform nil :accessor blend-flags)
+   (%source-rect :initarg :source-rect :initform nil :accessor %source-rect)))
 (defclass dirty-sprite (sprite) ())
 (defclass group ()
   ((sprites :initform nil :accessor %sprites)
@@ -45,6 +47,7 @@
    (layers :initform (make-hash-table :test #'eq) :reader %layers)))
 (defclass ordered-group (group) ())
 (defclass group-single (group) ())
+(defclass render-updates-group (group) ())
 (defclass layered-group (ordered-group) ())
 (defclass layered-dirty-group (layered-group)
   ((last-rects :initform (make-hash-table :test #'eq) :accessor %last-rects)
@@ -67,12 +70,28 @@
            (= (pixelisp:rect-y first) (pixelisp:rect-y second))
            (= (pixelisp:rect-width first) (pixelisp:rect-width second))
            (= (pixelisp:rect-height first) (pixelisp:rect-height second)))))
-(defun make-sprite (&key image rect (layer 0) (visible t) (dirty 1) mask radius blend-flags)
+(defun source-rect (sprite)
+  "Return a defensive copy of SPRITE's optional image crop rectangle."
+  (%copy-rect (%source-rect sprite)))
+(defun (setf source-rect) (value sprite)
+  "Set SPRITE's image crop rectangle, copying and validating VALUE."
+  (let ((copy (and value (%copy-rect (pixelisp.internal:as-rect value)))))
+    (unless (%rect-equal-p copy (%source-rect sprite))
+      (setf (%source-rect sprite) copy
+            (dirty sprite) (max 1 (dirty sprite))))
+    (source-rect sprite)))
+(defun %sprite-destination (sprite)
+  "Return the sprite's top-left destination; source crops keep this origin."
+  (let ((position (rect sprite)))
+    (list (pixelisp:rect-x position) (pixelisp:rect-y position))))
+(defun make-sprite (&key image rect source-rect (layer 0) (visible t) (dirty 1) mask radius blend-flags)
   "Construct a Sprite. When IMAGE is provided, RECT defaults to its image rectangle."
-  (make-instance 'sprite :image image :rect (or rect (if image (%surface-call "GET-RECT" image)
-                                                     (pixelisp:make-rect 0 0 0 0)))
-                 :layer layer :visible visible :dirty dirty :mask mask :radius radius
-                 :blend-flags blend-flags))
+  (let ((sprite (make-instance 'sprite :image image :rect (or rect (if image (%surface-call "GET-RECT" image)
+                                                                      (pixelisp:make-rect 0 0 0 0)))
+                               :layer layer :visible visible :dirty dirty :mask mask :radius radius
+                               :blend-flags blend-flags)))
+    (setf (source-rect sprite) source-rect)
+    sprite))
 (defmethod (setf visible-p) :after (value (sprite sprite))
   (declare (ignore value))
   (setf (dirty sprite) (max 1 (dirty sprite))))
@@ -160,6 +179,9 @@
   (let ((group (make-instance class))) (apply #'add group objects) group))
 (defun make-group (&rest sprites) "Create a group containing SPRITES in insertion order." (%construct-group 'group sprites))
 (defun make-group-single (&rest sprites) "Create a group that keeps only its most recently added sprite." (%construct-group 'group-single sprites))
+(defun make-render-updates-group (&rest sprites)
+  "Create an insertion-ordered group whose draw result describes changed pixels."
+  (%construct-group 'render-updates-group sprites))
 (defun single-sprite (group)
   "Return the group's only sprite, or NIL when it is empty."
   (first (%sprites group)))
@@ -189,6 +211,16 @@
   (maphash (lambda (sprite rect) (declare (ignore sprite)) (%restore target background rect)) (%drawn group))
   (dolist (rect (%pending group)) (%restore target background rect))
   (setf (%pending group) nil) group)
+(defmethod clear ((group render-updates-group) target background)
+  "Restore drawn and lost areas while retaining lost damage for the next draw."
+  (setf (%background group) background)
+  (maphash (lambda (sprite rectangle)
+             (declare (ignore sprite))
+             (%restore target background rectangle))
+           (%drawn group))
+  (dolist (rectangle (%pending group))
+    (%restore target background rectangle))
+  group)
 (defun get-clip (group)
   "Return a copy of GROUP's draw clip, or NIL when it has no additional clip."
   (%copy-rect (%group-clip group)))
@@ -235,11 +267,66 @@
     (dolist (sprite (sprites group))
       (when (and (image sprite) (visible-p sprite))
         (let ((rect (%surface-call "BLIT" target (image sprite)
-                                  (list (pixelisp:rect-x (rect sprite)) (pixelisp:rect-y (rect sprite)))
+                                  (%sprite-destination sprite)
+                                  :area (source-rect sprite)
                                   :special-flags (blend-flags sprite))))
           (setf (gethash sprite (%drawn group)) (%copy-rect rect))
           (push rect affected))))
     (nreverse affected)))
+
+(defun %rectangles-overlap-p (first second)
+  (and (< (pixelisp:rect-x first) (+ (pixelisp:rect-x second) (pixelisp:rect-width second)))
+       (< (pixelisp:rect-x second) (+ (pixelisp:rect-x first) (pixelisp:rect-width first)))
+       (< (pixelisp:rect-y first) (+ (pixelisp:rect-y second) (pixelisp:rect-height second)))
+       (< (pixelisp:rect-y second) (+ (pixelisp:rect-y first) (pixelisp:rect-height first)))))
+(defun %render-update-damage (old new)
+  "Return the changed rectangles, merging overlapping previous and current bounds."
+  (cond ((null old) (list new))
+        ((null new) (list (%copy-rect old)))
+        ((%rectangles-overlap-p old new) (list (px.rect:union old new)))
+        (t (list new (%copy-rect old)))))
+(defmethod draw ((group render-updates-group) target &optional background)
+  "Draw in insertion order and report old/new changed regions plus removed bounds."
+  (let* ((pending (mapcar #'%copy-rect (%pending group)))
+         (members (copy-list (%sprites group)))
+         (next-drawn (make-hash-table :test #'eq))
+         (damage pending)
+         (partial-draws nil)
+         (completed nil))
+    (maphash (lambda (sprite rectangle)
+               (setf (gethash sprite next-drawn) (%copy-rect rectangle)))
+             (%drawn group))
+    (unwind-protect
+         (progn
+           (when background (clear group target background))
+           (dolist (sprite members)
+             (let ((old (gethash sprite (%drawn group))))
+               (if (and (image sprite) (visible-p sprite))
+                   (let ((new (%surface-call "BLIT" target (image sprite)
+                                             (%sprite-destination sprite)
+                                             :area (source-rect sprite)
+                                             :special-flags (blend-flags sprite))))
+                     (push (%copy-rect new) partial-draws)
+                     (setf (gethash sprite next-drawn) (%copy-rect new))
+                     (setf damage (nconc damage (%render-update-damage old new))))
+                   (progn
+                     ;; Hidden sprites keep no painted bounds; report the old
+                     ;; area so the caller can restore it from its background.
+                     (when old (setf damage (nconc damage (list (%copy-rect old)))))
+                     (remhash sprite next-drawn)))))
+           (setf (%drawn group) next-drawn
+                 (%pending group) nil
+                 completed t)
+           damage)
+      (unless completed
+        ;; A background clear may have run before drawing failed. Retain the
+        ;; original lost bounds for retry. Also retain
+        ;; every successful partial blit: it may have left pixels on-screen
+        ;; even though the rest of this frame did not complete.
+        (dolist (rectangle pending)
+          (pushnew (%copy-rect rectangle) (%pending group) :test #'%rect-equal-p))
+        (dolist (rectangle partial-draws)
+          (pushnew (%copy-rect rectangle) (%pending group) :test #'%rect-equal-p))))))
 (defun %dirty-group-changed-p (group members)
   (or (%force-redraw group) (%repaints group) (%pending group)
       (some (lambda (sprite)
@@ -284,8 +371,8 @@
              (dolist (sprite members)
                (when (and (image sprite) (visible-p sprite))
                  (let ((drawn (%surface-call "BLIT" target (image sprite)
-                                (list (pixelisp:rect-x (rect sprite))
-                                      (pixelisp:rect-y (rect sprite)))
+                                (%sprite-destination sprite)
+                                :area (source-rect sprite)
                                 :special-flags (blend-flags sprite))))
                    (push drawn affected)
                    (setf (gethash sprite next-drawn) (%copy-rect drawn))))

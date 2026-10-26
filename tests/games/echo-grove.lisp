@@ -1,6 +1,26 @@
 (in-package #:pixelisp.examples.tests)
 (in-suite examples)
 
+(test echo-grove-cues-select-atlas-frames-during-gameplay
+  (px:with-init (:video nil)
+    (px.surface:with-surface (screen '(900 620))
+      (let* ((session (px.examples::make-game-session :screen screen))
+             (game (px.examples::make-echo-grove session))
+             (state (px.examples::mini-game-state game)))
+        (flet ((draw-game () (funcall (px.examples::mini-game-on-draw game) state session))
+               (red-at (point) (px:color-r (px.surface:get-at screen point))))
+          (draw-game)
+          (is (= 21 (red-at '(110 180))))
+          (is (= 82 (red-at '(110 338))))
+          (setf (px.examples::%echo-state-active state) 0)
+          (draw-game)
+          (is (= 67 (red-at '(110 180))))
+          (is (= 82 (red-at '(110 338))))
+          (setf (px.examples::%echo-state-active state) 2)
+          (draw-game)
+          (is (= 21 (red-at '(110 180))))
+          (is (= 255 (red-at '(110 338)))))))))
+
 (defun %echo-wait-for-input (state session)
   ;; Six notes at most: a bounded simulation protects against a stuck cue state.
   (loop repeat 200 until (eq :input (px.examples::%echo-state-phase state))

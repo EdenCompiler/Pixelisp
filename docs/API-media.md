@@ -86,7 +86,30 @@ Fonts are native resources: use `px:dispose` or `px.font:close`, or place them i
 
 ## Mixer and music
 
-Call `px.mixer:init` before loading or playing sounds. It opens SDL_mixer's shared audio device and accepts `:frequency`, `:size`, `:channels`, and `:buffer`; supported sample sizes are 8, -8, 16, -16, and -32 bits. `pre-init` stores defaults for the next initialization, while `get-init` returns the active frequency, signed sample size, and channel count.
+Call `px.mixer:init` before loading or playing sounds. It opens SDL_mixer's shared audio device and accepts `:frequency`, `:size`, `:channels`, and `:buffer`; supported sample sizes are 8, -8, 16, -16, -32, and 32 bits. Positive 32 selects native-endian float32 samples; -32 retains signed integer PCM32. `pre-init` stores defaults for the next initialization, while `get-init` returns the active frequency, sample format, and channel count.
+
+For a float32 mixer, copied arrays and live `px.sndarray:samples` views use
+specialized `single-float` elements. Mono data uses a frame vector; multichannel
+data uses `(frames channels)`, with four-byte samples and channel-interleaved
+native strides. Float array construction and live writes require single floats,
+without implicit conversion from integers or double floats. The conventional
+playback range is -1.0 through 1.0; out-of-range values are preserved. Raw PCM
+`:buffer` octets remain unchanged. File decoding converts samples into the active
+mixer format through SDL_mixer.
+
+`get-init` and `sample-format` report 32 for float32 and -32 for signed PCM32.
+This removes an ambiguity in pygame's current query, which can report -32 for
+both native formats. Python/NumPy dtype protocols become Lisp element types.
+
+```lisp
+(px.mixer:init :frequency 22050 :size 32 :channels 1)
+(let ((samples (make-array 2205 :element-type 'single-float :initial-element 0.0)))
+  (dotimes (i (length samples))
+    (setf (aref samples i) (coerce (* 0.2 (sin (* 2 pi 440 (/ i 22050)))) 'single-float)))
+  (px:with-resource (sound (px.sndarray:make-sound samples))
+    (px.mixer:play sound)
+    (loop while (px.mixer:get-busy sound) do (px.time:delay 10))))
+```
 
 Mixer shutdown is repeatable. Read-only playback queries return their idle value when the mixer is closed (`get-busy` is false, `get-pos` is -1, and the channel count is zero); operations that need an open mixer signal `px:initialization-error`. `px.font:quit` also closes fonts and is safe to call more than once.
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Add copied sprite source rectangles and RenderUpdates groups with old/new
+  painted damage, lost/hidden bounds, clear bookkeeping and failed-blit retry
+  preservation. Echo Grove now samples pad frames from a shared sprite sheet.
+- Add native-endian float32 mixer samples, specialized single-float copies and
+  live sound views, raw PCM/decode support, and explicit float/integer format
+  reporting. Retain float values outside the conventional playback range.
+- Add selected-monitor display creation, desktop-sized zero axes, native
+  `mode-ok` depth queries, and shown/minimized active-state reporting.
 - Save encoded PNG/JPEG/BMP/TGA images to octet vectors and caller-owned binary
   streams. Native codecs use a growable C buffer without Lisp callbacks or
   temporary files; TGA uses a readable uncompressed Lisp writer. Unknown file

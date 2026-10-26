@@ -6,7 +6,7 @@
   (:export #:init #:quit #:get-init #:set-mode #:get-surface #:get-window
            #:flip #:update #:set-caption #:get-caption #:get-window-size
            #:get-active #:toggle-fullscreen #:set-icon #:get-desktop-sizes
-           #:get-driver #:get-num-displays #:list-modes #:get-display-info
+           #:get-driver #:get-num-displays #:list-modes #:mode-ok #:get-display-info
            #:iconify #:get-allow-screensaver #:set-allow-screensaver))
 (defpackage #:pixelisp.event
   (:use #:cl) (:nicknames #:px.event) (:shadow #:get #:type #:wait)
@@ -125,18 +125,22 @@ Loading an ASDF system never initializes SDL or opens devices."
   (pixelisp.internal:check-video-thread)
   (when *screen* (pixelisp:dispose *screen*) (setf *screen* nil))
   (when *window* (sdl2:destroy-window *window*) (setf *window* nil)) t)
-(defun set-mode (size &key (flags '(:shown)) (title *caption*) fullscreen resizable)
+(defun set-mode (&optional (size '(0 0))
+                &key (flags '(:shown)) (title *caption*) fullscreen resizable (display 0))
   "Create the default display and return its software drawing surface.
 SET-MODE disposes the previous display surface. Offscreen assets are retained."
   (init)
-  (multiple-value-bind (width height) (pixelisp.internal:pair size)
-    (check-type width (integer 1 *)) (check-type height (integer 1 *))
+  ;; Resolve and validate the requested monitor/size before replacing a live
+  ;; display. A zero axis uses that monitor's desktop dimension.
+  (multiple-value-bind (width height) (%resolved-display-size size display)
     (quit)
     (let ((window-flags (append flags (when fullscreen '(:fullscreen-desktop))
-                               (when resizable '(:resizable)))))
-      (setf *window* (sdl2:create-window :title title :w width :h height :flags window-flags)
+                               (when resizable '(:resizable))))
+          (position (logior #x2fff0000 display))) ; SDL_WINDOWPOS_CENTERED_DISPLAY
+      (setf *window* (sdl2:create-window :title title :x position :y position
+                                      :w width :h height :flags window-flags)
             *caption* title))
-    (handler-case (setf *screen* (px.surface:make-surface size))
+    (handler-case (setf *screen* (px.surface:make-surface (list width height)))
       (error (condition) (quit) (error condition))))
   *screen*)
 (defun get-surface () *screen*)
@@ -151,7 +155,12 @@ SET-MODE disposes the previous display surface. Offscreen assets are retained."
 (defun set-icon (surface)
   (%set-icon (pixelisp.internal:%ptr (get-window))
              (pixelisp.internal:%ptr (pixelisp.internal:surface-handle surface))) surface)
-(defun get-active () (not (null *window*)))
+(defun get-active ()
+  "Return true when the default window is shown and not minimized."
+  (pixelisp.internal:check-video-thread)
+  (when *window*
+    (let ((flags (sdl2:get-window-flags *window*)))
+      (and (not (null (member :shown flags))) (not (member :minimized flags))))))
 (defun iconify ()
   "Request minimization of the current window and return true after issuing it.
 SDL's minimize call is void, so this does not report whether the window manager

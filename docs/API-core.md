@@ -259,8 +259,12 @@ native state (including `set-alpha`), rather than a particular blit's software
 
 ## Displays and events
 
-`px.display:set-mode` takes size plus `:title`, `:flags`, `:fullscreen`, and
-`:resizable`, and returns a software framebuffer. Calling it again replaces
+`px.display:set-mode` takes an optional size plus `:title`, `:flags`,
+`:fullscreen`, `:resizable`, and `:display`, and returns a software framebuffer.
+The display index defaults to zero and selects the monitor for window placement
+and desktop sizing. The default size is `(0 0)`; each zero axis independently
+uses that monitor's desktop dimension. For example, `(set-mode '(0 480))` uses
+desktop width and a 480-pixel logical height. Calling it again replaces
 and disposes the old framebuffer. `flip` presents the whole image; `update`
 accepts a rectangle or list of rectangles. A resized window scales the logical
 framebuffer on `flip`; call `set-mode` to change logical resolution. Caption,
@@ -273,6 +277,29 @@ fresh plist with desktop/current size, pixel format/depth, refresh rate, and
 driver when available. These queries require initialized video and do not create
 a window; call them on the video subsystem's initializing thread. Display-index
 queries default to display zero.
+
+`(px.display:mode-ok size &key flags (depth 0) (display 0) fullscreen)` queries
+the closest native display mode and returns its pixel depth, or 0 when no mode
+matches. A fullscreen request requires the exact requested dimensions. Standard
+depth hints are 8, 12, 15, 16, 24, and 32; other integer hints return 0.
+Like pygame's SDL2 implementation, flags other than fullscreen are ignored by
+this query. It does not create a window or select a drawing-surface format;
+Pixelisp's software framebuffer remains 32-bit. A native mode's 24 significant
+RGB bits can occupy 32 bits of pixel storage. Sizes are nonnegative integers.
+Monitor indices and integer size constraints are checked before replacing a live
+framebuffer.
+
+`get-active` reads SDL's shown/minimized state. It returns NIL before a window
+exists or when that window is hidden or minimized, and requires the video
+owner thread while video is active. It does not test keyboard focus or whether
+other applications cover the window.
+
+```lisp
+(px:with-init ()
+  (let ((desktop (getf (px.display:get-display-info 0) :desktop-size)))
+    (px.display:mode-ok desktop :fullscreen t :display 0)
+    (px.display:set-mode desktop :display 0 :title "Desktop canvas")))
+```
 
 `px.display:iconify` requests minimization of the current window and returns
 true after issuing SDL's request; it cannot report whether the window manager

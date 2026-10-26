@@ -15,7 +15,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `Color`, `color`, `colordict` | `px.color`, `px.colordict`, `px:make-color` | RGBA/name/hex/integer parsing, 665 named colors, HSV/HSL/CMY/I1I2I3, saturated arithmetic/inversion, gamma, grayscale/premultiplication, updates and interpolation; palette copies are CL hash tables |
 | `Rect`, `rect` | `px.rect`, `px:make-rect` | Integer geometry, validated updates, scalar/pair anchors, movement/scaling, aspect fitting, line clipping, in-place unions/clamping, object/hash-table collisions |
 | `Surface`, `surface`, `surflock` | `px.surface` | Owned/shared native surfaces, parent coordinates, pixel-format/blend queries, positioned rectangles, batch blits, RGB/RGBA blend effects, premultiplied alpha, RLE source hints, clipping, locks, typed views and bounded raw byte buffers |
-| `display` | `px.display` | Default window/framebuffer, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries, iconify request, screensaver control |
+| `display` | `px.display` | Default window/framebuffer, selected monitor and desktop sizing, closest-mode queries, visibility/minimized state, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries, iconify request, screensaver control |
 | `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
 | `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
@@ -30,13 +30,13 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `time` | `px.time` | Clocks, frame caps, elapsed/raw time, FPS, delay, pump-delivered timers |
 | `math`, `Vector2`, `Vector3` | `px.math` | Vector arithmetic, indexed components and swizzles with validated writes, updates, length scaling, geometry, scalar/vector interpolation, decimal rounding, bounded movement, degree/radian rotations, scalar clamp and polar/spherical conversion |
 | `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
-| `sprite` | `px.sprite` | CLOS sprites, single/ordered/layered/dirty groups, membership/update, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
+| `sprite` | `px.sprite` | CLOS sprites, source-image crops, single/ordered/RenderUpdates/layered/dirty groups, membership/update, old/new damage tracking and retry preservation, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
 | `font`, `sysfont` | `px.font`, `px.sysfont` | UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
 | `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
-| `sndarray` | `px.sndarray` | Copied sample arrays and live views, sound creation from arrays |
+| `sndarray` | `px.sndarray` | Integer PCM and float32 copied sample arrays/live views, sound creation from arrays |
 | `surfarray` | `px.surfarray` | Packed/RGB/channel copies and views, array-to-surface operations |
 | `pixelcopy` | `px.pixelcopy` | Copy into existing arrays and map pixel formats |
 | `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
@@ -97,6 +97,17 @@ The exported Lisp symbols and module API guides describe the actual interface.
   API and cannot be mixed with that software window's native surface.
   Display information is returned as ordinary plists; mode enumeration returns
   size pairs or NIL, without pygame's unrestricted-mode integer sentinel.
+  Desktop sizing fills zero axes independently. `mode-ok` queries native
+  display depths rather than changing the 32-bit software drawing format;
+  as in pygame's SDL2 backend, non-fullscreen flags are ignored by this query.
+- Sprite crop rectangles are copied rather than shared mutable properties and
+  work in every group, extending pygame's DirtySprite crop support. RenderUpdates
+  honors Pixelisp visibility and reports old hidden bounds; pygame's plain
+  RenderUpdates draws its members without consulting DirtySprite visibility.
+- Float32 sound arrays use `single-float` and report sample format 32, distinct
+  from signed integer PCM32 (-32). Pygame 2.6.1 can report -32 for both formats.
+  Out-of-range float values are retained, with -1 through 1 the conventional
+  playback range; dtype conversions are explicit Lisp operations.
 - SDL renderer target support depends on the active backend. `to-surface` is
   a slow readback from the current render target, limited to an in-bounds
   physical-pixel area; when a destination surface is supplied, its size must
@@ -151,7 +162,12 @@ joysticks, worker behavior and lifetimes.
 Renderer blitting tests cover pixels, cropping, destination/viewport return
 values and shared texture state; the mini-game renderer runner uses this API.
 Xvfb exercises X11 presentation, clipboard text, independent window grabs,
-window flags and fullscreen transitions.
+window flags and fullscreen transitions. Display tests cover desktop-size
+resolution, selected-monitor placement, native mode queries and visibility;
+multi-monitor physical placement still depends on the connected SDL backend.
+Sprite tests cover crop painting, old/new damage, clear/removal bookkeeping and
+failed-blit retries. Float32 audio tests cover copies, live strides, PCM decode
+conversion, dummy playback, invalid writes and repeated shutdown.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
 The retained-text fixture compares immediate reuse. The local pygame build's

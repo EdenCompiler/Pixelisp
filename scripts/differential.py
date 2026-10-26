@@ -47,7 +47,73 @@ CASE_NAMES = [
     "SDL2 renderer blitting", "FreeType layout controls", "FreeType baseline ink bounds",
     "premultiplied image bytes", "encoded sound memory", "FreeType independent size axes",
     "encoded image output", "music memory playback", "FreeType retained text and bitmap settings",
+    "sprite image crops", "RenderUpdates damage", "float32 sound arrays", "native display mode queries",
 ]
+
+
+def sprite_image_crops():
+    source = pygame.Surface((4, 2), 0, 32)
+    for index in range(8):
+        source.set_at((index % 4, index // 4), ((index + 1) * 10, 0, 0))
+    target = pygame.Surface((6, 3), 0, 32)
+    target.fill((5, 0, 0))
+    background = target.copy()
+    actor = pygame.sprite.DirtySprite()
+    actor.image, actor.rect = source, pygame.Rect(2, 1, 2, 1)
+    actor.source_rect = pygame.Rect(1, 0, 2, 1)
+    group = pygame.sprite.LayeredDirty(actor)
+    group.draw(target, background)
+    result = [red_values(target)]
+    actor.source_rect, actor.dirty = pygame.Rect(2, 1, 1, 1), 1
+    group.draw(target, background)
+    result.append(red_values(target))
+    result.append(list(actor.rect))
+    return result
+
+
+def render_updates_damage():
+    image = pygame.Surface((2, 2), 0, 32)
+    target = pygame.Surface((12, 3), 0, 32)
+    background = target.copy()
+    actors = [pygame.sprite.Sprite(), pygame.sprite.Sprite()]
+    for actor, x in zip(actors, [0, 8]):
+        actor.image, actor.rect = image, pygame.Rect(x, 0, 2, 2)
+    group = pygame.sprite.RenderUpdates(*actors)
+    result = [[list(rect) for rect in group.draw(target)]]
+    actors[0].rect.x, actors[1].rect.x = 1, 10
+    result.append([list(rect) for rect in group.draw(target)])
+    group.remove(actors[0])
+    group.clear(target, background)
+    result.append([list(rect) for rect in group.draw(target)])
+    return result
+
+
+def float32_sound_arrays():
+    import numpy as np
+    pygame.mixer.quit()
+    pygame.mixer.init(22050, 32, 2, allowedchanges=0)
+    try:
+        sound = pygame.sndarray.make_sound(np.array([[-1.0, -0.5], [0.75, 1.5]], dtype=np.float32))
+        view = pygame.sndarray.samples(sound)
+        view[0, 1], view[1, 0] = -0.75, 0.25
+        return [list(sound.get_raw()),
+                [round(float(value) * 4) for value in pygame.sndarray.array(sound).flat],
+                list(view.strides)]
+    finally:
+        pygame.mixer.quit()
+
+
+def native_display_mode_queries():
+    pygame.display.init()
+    pygame.display.quit()
+    pygame.display.init()
+    desktop = pygame.display.get_desktop_sizes()[0]
+    modes = [pygame.display.mode_ok(size, flags, depth)
+             for size, flags, depth in [((31, 19), 0, 0), ((30000, 30000), 0, 8),
+                                       (desktop, pygame.FULLSCREEN, 0),
+                                       ((31, 19), pygame.FULLSCREEN, 0), ((31, 19), 0, 7)]]
+    pygame.display.set_mode((0, 0))
+    return [modes, list(pygame.display.get_surface().get_size()), int(pygame.display.get_active())]
 
 
 def encoded_image_output():
@@ -992,6 +1058,7 @@ def reference():
         renderer_blitting(), freetype_layout_controls(), freetype_baseline_ink_bounds(),
         premultiplied_image_bytes(), encoded_sound_memory(), freetype_independent_size_axes(),
         encoded_image_output(), music_memory_playback(), freetype_retained_text(),
+        sprite_image_crops(), render_updates_damage(), float32_sound_arrays(), native_display_mode_queries(),
     ]
 
 

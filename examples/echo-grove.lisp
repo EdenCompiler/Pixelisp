@@ -103,13 +103,23 @@
     (px.surface:fill image '(8 17 30) '(0 124 334 8))
     image))
 
+(defun %echo-pad-atlas (colors)
+  "Pack dim/lit frames into one sheet: columns select pads, rows select light."
+  (let ((sheet (px.surface:make-surface '(1336 264))))
+    (loop for color in colors for column from 0 do
+      (loop for lit in '(nil t) for row from 0 do
+        (px:with-resource (frame (%echo-pad-image color lit))
+          (px.surface:blit sheet frame (list (* column 334) (* row 132))))))
+    sheet))
+
 (defun make-echo-grove (session)
-  "Build four pad sprites; their cached images switch with the current cue."
+  "Build four pad sprites; source rectangles select their current atlas frame."
   (let* ((colors '((67 184 248) (76 219 163) (255 146 99) (182 138 255)))
-         (dim (mapcar (lambda (c) (%echo-pad-image c nil)) colors))
-         (lit (mapcar (lambda (c) (%echo-pad-image c t)) colors))
-         (pads (loop for rect in +echo-pad-rects+ for image in dim
-                     collect (px.sprite:make-sprite :image image :rect (apply #'px:make-rect rect))))
+         (atlas (%echo-pad-atlas colors))
+         (pads (loop for rect in +echo-pad-rects+ for column from 0
+                     collect (px.sprite:make-sprite
+                              :image atlas :rect (apply #'px:make-rect rect)
+                              :source-rect (list (* column 334) 0 334 132))))
          (group (apply #'px.sprite:make-ordered-group pads)))
     (make-mini-game
      :id :echo-grove :title "ECHO GROVE"
@@ -124,9 +134,12 @@
              :lives (%echo-state-lives state))
        (%text current-session (%echo-state-message state) 450 121 :anchor :center
               :size 21 :color '(216 232 243))
-       (loop for pad in pads for index from 0
-             do (setf (px.sprite:image pad)
-                      (nth index (if (eql index (%echo-state-active state)) lit dim))))
+       ;; The cue changes the sampled atlas row; all pads keep the same image.
+       ;; Screen rectangles stay independent of the source-image coordinates.
+       (loop for pad in pads for column from 0
+             do (setf (px.sprite:source-rect pad)
+                      (list (* column 334) (if (eql column (%echo-state-active state)) 132 0)
+                            334 132)))
        (px.sprite:draw group (session-screen current-session))
        (loop for rect in +echo-pad-rects+ for label in '("1 / ↑" "2 / →" "3 / ←" "4 / ↓")
              do (%text current-session label (+ (first rect) 167) (+ (second rect) 64)

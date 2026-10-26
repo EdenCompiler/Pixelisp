@@ -155,9 +155,10 @@ make test-examples # Bounded examples with generated mouse/key events.
 ```
 
 After loading dependencies, `(asdf:test-system "pixelisp")` runs the same suite.
-The library does not depend on Python. With pygame 2.6.1 installed,
+The library does not depend on Python. With pygame 2.6.1 and NumPy installed,
 `python3 scripts/differential.py` runs selected reference fixtures,
-including every bundled named color. It needs pygame 2.6.1 only as test tooling.
+including every bundled named color and float32 audio arrays. Python, pygame,
+and NumPy are used only by this optional comparison tool.
 
 - [Surface, event, timing, and array APIs](docs/API-core.md)
 - [Drawing, transforms, masks, vectors, and sprites](docs/API-graphics.md)

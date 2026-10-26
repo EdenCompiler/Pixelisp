@@ -263,6 +263,36 @@ Sprite constructors accept `:blend-flags`, and the settable `blend-flags`
 property controls the surface `:special-flags` used by group drawing. Changing
 it marks a clean sprite dirty so stationary effects are redrawn too.
 
+Sprite constructors also accept `:source-rect` to sample a region of the image,
+such as one frame of a sprite sheet. NIL samples the whole image. `source-rect`
+supports `setf` and copies rectangles on both input and output; changing a crop
+marks the sprite dirty. The crop uses image coordinates, while the sprite's
+`rect` still determines the destination origin and collision bounds. Image and
+destination clips follow the normal surface blit rules. Crops work with all
+Pixelisp group types; pygame exposes this property through DirtySprite.
+
+```lisp
+(let ((actor (px.sprite:make-sprite :image sheet :rect (px:make-rect 100 80 32 32)
+                                   :source-rect '(64 0 32 32))))
+  ;; Advance to the fourth frame without changing the actor's screen position.
+  (setf (px.sprite:source-rect actor) '(96 0 32 32)))
+```
+
+`make-render-updates-group` provides pygame's RenderUpdates behavior. It draws
+in insertion order and returns damage for current and previous painted bounds.
+Overlapping old/new bounds are united; disjoint bounds remain separate. Removed
+and hidden sprites contribute their former painted regions. Call `clear` with
+a background before drawing to restore prior pixels; damage reporting alone
+does not erase them. The optional background argument to `draw` performs that
+clear. Failed blits preserve pending damage so a later draw can retry.
+
+```lisp
+(px.sprite:clear actors screen background)
+(let ((damage (px.sprite:draw actors screen)))
+  ;; UPDATE with NIL presents the whole frame, so skip it when nothing changed.
+  (when damage (px.display:update damage)))
+```
+
 ## Surface lifetime
 
 Surfaces are resources. Prefer `px.surface:with-surface` for short-lived
