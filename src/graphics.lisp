@@ -331,38 +331,73 @@
     (values width height)))
 
 (defun %new-like (source width height)
-  (let ((result (px.surface:make-surface (list width height) :alpha (px.surface:alpha-p source))))
+  ;; Keep the source's storage layout. In particular, indexed surfaces must
+  ;; retain their palette so raw pixel indices continue to mean the same thing.
+  (let ((result (px.surface::%make-like source (list width height))))
     (px.surface:set-alpha result (px.surface:get-alpha source))
-    (px.surface:set-colorkey result (px.surface:get-colorkey source))
+    (px.surface:set-colorkey result (px.surface::%native-colorkey source))
     result))
 
+(defun %read-pixel (surface x y)
+  (px.surface::%read-packed-pixel surface x y))
+
+(defun %write-pixel (surface x y value)
+  ;; Surface transform writes address the requested pixels directly. A surface
+  ;; clip rectangle affects drawing and blitting, not transform output.
+  (px.surface::%write-packed-pixel surface x y value))
+
+(defmacro %with-pixel-locks ((source target) &body body)
+  `(progn
+     (px.surface:lock ,source)
+     (unwind-protect
+          (progn
+            (unless (eq ,source ,target) (px.surface:lock ,target))
+       (unwind-protect (progn ,@body)
+              (unless (eq ,source ,target) (px.surface:unlock ,target))))
+       (px.surface:unlock ,source))))
+
 (defun %copy-pixel (source source-x source-y target target-x target-y)
-  ;; SET-AT copies channel values, unlike BLIT, which would apply source blending.
-  (px.surface:set-at target (list target-x target-y)
-                     (px.surface:get-at source (list source-x source-y))))
+  (%write-pixel target target-x target-y (%read-pixel source source-x source-y)))
+
+(defun %same-format-p (first second)
+  (and (= (px.surface:get-bitsize first) (px.surface:get-bitsize second))
+       (equal (px.surface:get-masks first) (px.surface:get-masks second))))
+
+(defun %check-destination (source destination width height operation)
+  (unless (and (= width (px.surface:width destination))
+               (= height (px.surface:height destination)))
+    (error "The ~A destination has the wrong dimensions." operation))
+  (unless (%same-format-p source destination)
+    (error "The ~A destination Surface has a different pixel format." operation))
+  (when (eq source destination)
+    (error "The ~A operation requires a distinct destination Surface." operation)))
+
+(defun %check-filter-depth (surface operation)
+  (when (< (px.surface:get-bitsize surface) 24)
+    (error "~A supports only 24-bit and 32-bit Surfaces." operation)))
 
 (defun flip (surface horizontal vertical)
   "Return a new image mirrored horizontally, vertically, or both."
   (let* ((width (px.surface:width surface)) (height (px.surface:height surface))
          (result (%new-like surface width height)))
-    (dotimes (y height result)
-      (dotimes (x width)
-        (%copy-pixel surface (if horizontal (- width x 1) x)
-                     (if vertical (- height y 1) y) result x y)))))
+    (%with-pixel-locks (surface result)
+      (dotimes (y height result)
+        (dotimes (x width)
+          (%copy-pixel surface (if horizontal (- width x 1) x)
+                       (if vertical (- height y 1) y) result x y))))))
 
 (defun scale (surface size &optional destination)
   "Resize with nearest-neighbor sampling. An optional DESTINATION must match SIZE."
   (multiple-value-bind (width height) (%dimensions size)
     (let* ((source-width (px.surface:width surface)) (source-height (px.surface:height surface))
            (result (or destination (%new-like surface width height))))
-      (unless (and (= width (px.surface:width result)) (= height (px.surface:height result)))
-        (error "The destination Surface has the wrong dimensions."))
-      (when (eq result surface) (error "Scaling requires a distinct destination Surface."))
-      (when (and (plusp source-width) (plusp source-height))
-        (dotimes (y height)
-          (dotimes (x width)
-            (%copy-pixel surface (min (1- source-width) (floor (* x source-width) width))
-                         (min (1- source-height) (floor (* y source-height) height)) result x y))))
+      (%check-destination surface result width height "scale")
+      (%with-pixel-locks (surface result)
+        (when (and (plusp source-width) (plusp source-height))
+          (dotimes (y height)
+            (dotimes (x width)
+              (%copy-pixel surface (min (1- source-width) (floor (* x source-width) width))
+                           (min (1- source-height) (floor (* y source-height) height)) result x y)))))
       result)))
 
 (defun %factor-size (surface factor)
@@ -401,12 +436,11 @@
 
 (defun smoothscale (surface size &optional destination)
   "Resize using area averaging while shrinking and bilinear sampling while growing."
+  (%check-filter-depth surface "Smoothscale")
   (multiple-value-bind (width height) (%dimensions size)
     (let* ((source-width (px.surface:width surface)) (source-height (px.surface:height surface))
            (result (or destination (%new-like surface width height))))
-      (unless (and (= width (px.surface:width result)) (= height (px.surface:height result)))
-        (error "The destination Surface has the wrong dimensions."))
-      (when (eq result surface) (error "Scaling requires a distinct destination Surface."))
+      (%check-destination surface result width height "smoothscale")
       (when (and (plusp source-width) (plusp source-height))
         (dotimes (y height)
           (dotimes (x width)
@@ -430,35 +464,70 @@
            append (loop for (py wy) in (list (list top (- 1 fy)) (list (min (1- height) (1+ top)) fy))
                         collect (list (px.surface:get-at surface (list px py)) (* wx wy)))))))
 
-(defun %rotation (surface degrees zoom filtered)
-  (unless (plusp zoom) (error "Rotation scale must be positive."))
+(defun %rotation-image (surface pixel-source degrees zoom filtered)
+  "Build a rotated image, disposing a partial result if pixel processing fails."
   (let* ((radians (* degrees (/ pi 180)))
          (cosine (cos radians)) (sine (sin radians))
-         (source-width (px.surface:width surface)) (source-height (px.surface:height surface))
+         (source-width (px.surface:width surface))
+         (source-height (px.surface:height surface))
          ;; Tiny trigonometric error must not add a row at exact quarter turns.
-         (width (ceiling (- (* zoom (+ (* source-width (abs cosine)) (* source-height (abs sine)))) 1d-10)))
-         (height (ceiling (- (* zoom (+ (* source-width (abs sine)) (* source-height (abs cosine)))) 1d-10)))
-         (result (%new-like surface (max 0 width) (max 0 height))))
-    (when (and (plusp source-width) (plusp source-height))
-      (let ((background (if (px.surface:alpha-p surface) (pixelisp:make-color 0 0 0 0)
-                            (or (px.surface:get-colorkey surface) (px.surface:get-at surface '(0 0))))))
-        (px.surface:fill result background)
-        (dotimes (y height)
-          (dotimes (x width)
-            (let* ((dx (/ (- (+ x 1/2) (/ width 2)) zoom))
-                   (dy (/ (- (+ y 1/2) (/ height 2)) zoom))
-                   ;; In image coordinates positive Y points downward. Inverting
-                   ;; the counterclockwise transform therefore uses this sign.
-                   (sx (+ (* cosine dx) (- (* sine dy)) (/ source-width 2) -1/2))
-                   (sy (+ (* sine dx) (* cosine dy) (/ source-height 2) -1/2)))
-              (when (and (<= -1/2 sx) (< sx (- source-width 1/2))
-                         (<= -1/2 sy) (< sy (- source-height 1/2)))
-                (px.surface:set-at result (list x y)
-                  (if filtered (%bilinear surface sx sy)
-                      (px.surface:get-at surface
-                        (list (max 0 (min (1- source-width) (floor (+ sx 1/2))))
-                              (max 0 (min (1- source-height) (floor (+ sy 1/2))))))))))))))
-    result))
+         (width (ceiling (- (* zoom (+ (* source-width (abs cosine))
+                                      (* source-height (abs sine)))) 1d-10)))
+         (height (ceiling (- (* zoom (+ (* source-width (abs sine))
+                                       (* source-height (abs cosine)))) 1d-10)))
+         (result (if filtered
+                     (px.surface:make-surface (list (max 0 width) (max 0 height))
+                                              :depth 32 :alpha t)
+                     (%new-like surface (max 0 width) (max 0 height))))
+         (complete nil))
+    (unwind-protect
+         (progn
+           (%with-pixel-locks (pixel-source result)
+             (when (and (plusp source-width) (plusp source-height))
+               (let ((background
+                       (if (or filtered (px.surface:alpha-p surface))
+                           (px.surface:map-rgb result '(0 0 0 0))
+                           (or (px.surface::%native-colorkey surface)
+                               (%read-pixel pixel-source 0 0)))))
+                 (dotimes (y height)
+                   (dotimes (x width)
+                     (%write-pixel result x y background)))
+                 (dotimes (y height)
+                   (dotimes (x width)
+                     (let* ((dx (/ (- (+ x 1/2) (/ width 2)) zoom))
+                            (dy (/ (- (+ y 1/2) (/ height 2)) zoom))
+                            ;; Positive Y points down; invert the rotation's
+                            ;; counterclockwise transform to find each source.
+                            (sx (+ (* cosine dx) (- (* sine dy))
+                                   (/ source-width 2) -1/2))
+                            (sy (+ (* sine dx) (* cosine dy)
+                                   (/ source-height 2) -1/2)))
+                       (when (and (<= -1/2 sx) (< sx (- source-width 1/2))
+                                  (<= -1/2 sy) (< sy (- source-height 1/2)))
+                         (if filtered
+                             (px.surface:set-at result (list x y)
+                                               (%bilinear pixel-source sx sy))
+                             (%write-pixel result x y
+                               (%read-pixel pixel-source
+                                 (max 0 (min (1- source-width)
+                                             (floor (+ sx 1/2))))
+                                 (max 0 (min (1- source-height)
+                                             (floor (+ sy 1/2))))))))))))))
+           (setf complete t)
+           result)
+      (unless complete (px:dispose result)))))
+
+(defun %rotation (surface degrees zoom filtered)
+  (unless (realp degrees) (error "Rotation angle must be a real number."))
+  (unless (and (realp zoom) (plusp zoom))
+    (error "Rotation scale must be a positive real number."))
+  ;; pygame's rotozoom always produces filtered 32-bit pixels. Convert through
+  ;; Surface conversion so indexed and 16-bit sources can use the same sampler.
+  ;; Conversion preserves the stored pixels while translating key to pixel alpha.
+  (let ((pixel-source (if filtered (px.surface:convert-alpha surface) surface)))
+    (unwind-protect
+         (%rotation-image surface pixel-source degrees zoom filtered)
+      (when filtered (px:dispose pixel-source)))))
 (defun rotate (surface degrees)
   "Rotate counterclockwise into an expanded image using nearest-neighbor samples."
   (%rotation surface degrees 1 nil))
@@ -466,31 +535,25 @@
   "Rotate and uniformly resize in one bilinearly filtered operation."
   (%rotation surface degrees zoom t))
 
-(defun %same-color-p (first second)
-  (and (= (pixelisp:color-r first) (pixelisp:color-r second))
-       (= (pixelisp:color-g first) (pixelisp:color-g second))
-       (= (pixelisp:color-b first) (pixelisp:color-b second))
-       (= (pixelisp:color-a first) (pixelisp:color-a second))))
-
 (defun scale2x (surface &optional destination)
   "Double pixel art using the Scale2x edge-preserving neighborhood rule."
   (let* ((width (px.surface:width surface)) (height (px.surface:height surface))
          (result (or destination (%new-like surface (* 2 width) (* 2 height)))))
-    (unless (and (= (* 2 width) (px.surface:width result)) (= (* 2 height) (px.surface:height result)))
-      (error "The Scale2x destination has the wrong size."))
+    (%check-destination surface result (* 2 width) (* 2 height) "Scale2x")
+    (%with-pixel-locks (surface result)
     (dotimes (y height result)
       (dotimes (x width)
         (flet ((pixel (dx dy)
-                 (px.surface:get-at surface (list (max 0 (min (1- width) (+ x dx)))
-                                                 (max 0 (min (1- height) (+ y dy)))))))
+                 (%read-pixel surface (max 0 (min (1- width) (+ x dx)))
+                              (max 0 (min (1- height) (+ y dy))))))
           (let ((above (pixel 0 -1)) (left (pixel -1 0)) (center (pixel 0 0))
                 (right (pixel 1 0)) (below (pixel 0 1)))
             (loop for (dx dy first second) in
                   (list (list 0 0 left above) (list 1 0 above right)
                         (list 0 1 left below) (list 1 1 below right))
-                  do (px.surface:set-at result (list (+ (* 2 x) dx) (+ (* 2 y) dy))
-                       (if (and (not (%same-color-p above below)) (not (%same-color-p left right))
-                                (%same-color-p first second)) first center)))))))))
+                  do (%write-pixel result (+ (* 2 x) dx) (+ (* 2 y) dy)
+                       (if (and (/= above below) (/= left right)
+                                (= first second)) first center))))))))))
 
 (defun chop (surface rectangle)
   "Remove the rectangle's horizontal and vertical bands and join the remainder."
@@ -500,10 +563,11 @@
          (width (- (px.surface:width surface) cut-width))
          (height (- (px.surface:height surface) cut-height))
          (result (%new-like surface width height)))
-    (dotimes (y height result)
-      (dotimes (x width)
-        (%copy-pixel surface (if (< x cut-x) x (+ x cut-width))
-                     (if (< y cut-y) y (+ y cut-height)) result x y)))))
+    (%with-pixel-locks (surface result)
+      (dotimes (y height result)
+        (dotimes (x width)
+          (%copy-pixel surface (if (< x cut-x) x (+ x cut-width))
+                       (if (< y cut-y) y (+ y cut-height)) result x y))))))
 
 (defun grayscale (surface &optional destination)
   "Return luminance-weighted grayscale pixels, preserving alpha."
@@ -711,15 +775,13 @@ positioning, and repeated anchors apply in order, with the last one winning."
 (defun from-surface (surface &key (threshold 127))
   "Build collision bits from a color key, or alpha strictly greater than THRESHOLD."
   (let* ((result (make-mask (px.surface:size surface)))
-         (key (let ((key (px.surface:get-colorkey surface)))
-                (when key (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba key))))))
+         (key (px.surface::%native-colorkey surface)))
     (dotimes (y (height result) result)
       (dotimes (x (width result))
         (let ((color (px.surface:get-at surface (list x y))))
           (when (if key
-                    (not (and (= (pixelisp:color-r color) (pixelisp:color-r key))
-                              (= (pixelisp:color-g color) (pixelisp:color-g key))
-                              (= (pixelisp:color-b color) (pixelisp:color-b key))))
+                    (not (px.surface::%colorkey-pixel-p
+                           surface (px.surface:get-at-mapped surface (list x y)) key))
                     (> (pixelisp:color-a color) threshold))
             (setf (aref (mask-bits result) y x) 1)))))))
 (defun from-threshold (surface color &key (threshold '(0 0 0 255)) other-surface)

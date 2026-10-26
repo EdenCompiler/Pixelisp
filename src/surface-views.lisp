@@ -38,16 +38,12 @@
 
 (defun %view-channel-offset (surface channel)
   "Return CHANNEL's byte position within a native pixel, or NIL if absent."
-  (let ((components (make-list 4 :initial-element 0)))
-    (setf (nth (position channel '(:red :green :blue :alpha)) components) 255)
-    (cffi:with-foreign-object (pixel :uint32)
-      (setf (cffi:mem-ref pixel :uint32)
-            (apply #'pixelisp.internal::%map-rgba
-                   (pixelisp.internal::%ptr
-                    (sdl2:surface-format (pixelisp.internal:surface-handle surface)))
-                   components))
-      (loop for offset below (get-bytesize surface)
-            when (= 255 (cffi:mem-aref pixel :uint8 offset)) return offset))))
+  (when (member (get-bitsize surface) '(24 32))
+    (let* ((mask (nth (position channel '(:red :green :blue :alpha)) (get-masks surface)))
+           (shift (%mask-shift mask)))
+      (when (and (= 8 (logcount mask)) (zerop (mod shift 8)))
+        (if (eq (%view-byte-order) :little) (/ shift 8)
+            (- (get-bytesize surface) 1 (/ shift 8)))))))
 
 (defun %view-kind (kind)
   "Normalize pygame's one-character string or character view selector."

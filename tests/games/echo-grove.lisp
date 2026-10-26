@@ -19,7 +19,14 @@
           (setf (px.examples::%echo-state-active state) 2)
           (draw-game)
           (is (= 21 (red-at '(110 180))))
-          (is (= 255 (red-at '(110 338)))))))))
+          (is (= 255 (red-at '(110 338))))
+          (is (= 245 (red-at '(110 328))))
+          (setf (px.examples::%echo-state-lives state) 1)
+          (draw-game)
+          (is (equal '(255 90 60 255) (px.color:to-list (px.surface:get-at screen '(110 328)))))
+          (setf (px.examples::%echo-state-lives state) 3)
+          (draw-game)
+          (is (= 245 (red-at '(110 328)))))))))
 
 (defun %echo-wait-for-input (state session)
   ;; Six notes at most: a bounded simulation protects against a stuck cue state.

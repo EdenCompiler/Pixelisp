@@ -22,7 +22,9 @@ uses rectangles, vectors, native surface blits, and generated sound; Orbit
 Patrol uses cached rotations with RLE source blits, vectors, and pixel-mask collisions; Crater Command
 joins rendered terrain to a mutable mask; Echo Grove combines event input,
 cached text, pad sprites sampling dim/lit frames from a shared image atlas,
-and optional audio. Its melody cues are
+and optional audio. The atlas uses indexed 8-bit pixels; changing a shared
+highlight palette entry warns when one mistake life remains, and restores the
+normal highlight on restart without rebuilding pixels. Its melody cues are
 generated WAV assets decoded from memory and cached for replay; other games
 construct sounds directly from sample arrays. Game state and update
 helpers are ordinary Lisp data and functions, which makes the rules testable

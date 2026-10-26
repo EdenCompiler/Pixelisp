@@ -12,6 +12,11 @@ SDL_image needs a format hint. The hint is ASCII alphanumeric (an extension is
 accepted); supported codecs depend on the linked SDL_image build. Streams remain
 open and owned by the caller. Loaded pixels are normalized into the drawing
 API's surface format, so dispose the returned surface when finished.
+Pass `:preserve-format t` to `load` or `load-bytes` to retain the decoded native
+depth, palette, and indices instead. This is useful for indexed BMP/PNG assets
+whose palette changes during gameplay. The default remains RGBA32. All source
+forms accept the option, and a non-boolean value is rejected before reading
+streams or allocating a native image. Actual decoded formats depend on the codec.
 `load-bytes` explicitly decodes encoded image-file bytes. `from-bytes` is an
 alias for `from-string` and copies raw packed pixel bytes using the selected
 dimensions and channel order; it does not decode a PNG/JPEG file.

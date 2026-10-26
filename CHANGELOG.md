@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add indexed and lower-depth surfaces, validated channel masks, editable
+  palettes, mapped pixel writes and depth/template conversion. Subsurfaces
+  share pixel indices with independent palettes; copies retain raw indices.
+- Extend copied arrays, packed views and nearest transforms across native
+  pixel widths; retain distinct keyed indices with duplicate palette colors.
+  Add optional native-format image loading and RGBA32 filtered rotozoom output.
+- Use an indexed Echo Grove atlas with palette-driven last-life highlights.
 - Load SDL_ttf fonts from encoded octet vectors and caller-owned binary streams,
   retaining private native storage until font cleanup. Mini-game text caches
   now share encoded font assets.

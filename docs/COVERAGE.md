@@ -14,12 +14,12 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `version` | `px.version` | Library/reference versions and linked SDL version |
 | `Color`, `color`, `colordict` | `px.color`, `px.colordict`, `px:make-color` | RGBA/name/hex/integer parsing, 665 named colors, HSV/HSL/CMY/I1I2I3, saturated arithmetic/inversion, gamma, grayscale/premultiplication, updates and interpolation; palette copies are CL hash tables |
 | `Rect`, `rect` | `px.rect`, `px:make-rect` | Integer geometry, validated updates, scalar/pair anchors, movement/scaling, aspect fitting, line clipping, in-place unions/clamping, object/hash-table collisions |
-| `Surface`, `surface`, `surflock` | `px.surface` | Owned/shared native surfaces, parent coordinates, pixel-format/blend queries, positioned rectangles, batch blits, RGB/RGBA blend effects, premultiplied alpha, RLE source hints, clipping, locks, typed views and bounded raw byte buffers |
+| `Surface`, `surface`, `surflock` | `px.surface` | 8/12/15/16/24/32-bit surfaces, validated masks, editable indexed palettes, mapped writes, format conversion, owned/shared pixel storage with independent palette state, parent coordinates, pixel-format/blend queries, positioned rectangles, batch blits, RGB/RGBA blend effects, premultiplied alpha, RLE source hints, clipping, locks, typed views and bounded raw byte buffers |
 | `display` | `px.display` | Default window/framebuffer, selected monitor and desktop sizing, closest-mode queries, visibility/minimized state, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries, iconify request, screensaver control |
 | `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
-| `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
-| `transform` | `px.transform` | Flip, scaling, smooth scaling, rotation/rotozoom, scale2x, chop, color operations, thresholding, Laplacian edges |
+| `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams with optional decoded format/palette preservation; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
+| `transform` | `px.transform` | Native format/index-preserving flip, nearest scaling, rotation, scale2x and chop; 24/32-bit smooth scaling, RGBA32 rotozoom, color operations, thresholding, Laplacian edges |
 | `event` | `px.event` | Native event copying including mouse device/window identity, touch origin and precise wheel deltas; include/exclude retrieval with optional pumping, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
 | `key` | `px.key` | Scancode state, keyword names, modifiers, focus, text-input controls and configurable pump-delivered native key repeat |
 | `mouse` | `px.mouse` | Position, relative movement, buttons, visibility, focus, relative mode |
@@ -37,7 +37,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Output-device selection and allowed-setting negotiation; sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
 | `sndarray` | `px.sndarray` | Integer PCM and float32 copied sample arrays/live views, sound creation from arrays |
-| `surfarray` | `px.surfarray` | Packed/RGB/channel copies and views, array-to-surface operations |
+| `surfarray` | `px.surfarray` | Packed/RGB/channel copies across native depths, packed views except 24-bit, full byte-channel views at 24/32-bit, array-to-surface operations |
 | `pixelcopy` | `px.pixelcopy` | Copy into existing arrays and map pixel formats |
 | `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
 | `BufferProxy`, `bufferproxy`, `newbuffer` | `px.buffer`, `px.bufferproxy` | Owner-backed views, bounds/lifetime checks, explicit release and slicing |
@@ -67,6 +67,15 @@ The exported Lisp symbols and module API guides describe the actual interface.
   alpha channel, and byte offsets/strides reflect imported channel layouts.
   PixelArray comparisons decode colors across different native layouts; copied
   selection/comparison masks use bits rather than new PixelArray wrappers.
+- Surface constructors retain Pixelisp's existing RGB byte order at 24/32-bit;
+  custom masks select other SDL layouts. RGB565 and indexed RGB332 defaults
+  match conventional SDL formats. Palettes are opaque RGB; use a color key
+  for indexed transparency. Images normalize to RGBA32 unless
+  `:preserve-format t` is requested. Packed `get-view` and PixelArray views
+  support 24-bit values with three-byte strides, while surfarray `pixels2d`
+  rejects that depth as pygame does. Copied 24-bit values use 32-bit arrays.
+  Nonempty surfaces and the documented native depths are supported; other
+  bit depths or mask layouts signal explicit errors.
 - Drawing, antialiasing, alpha rounding, filtered transforms, and text layout
   can differ from pygame's exact pixels. The implementation favors readable
   CPU algorithms; there is no performance or bit-exact parity claim.
@@ -181,6 +190,10 @@ invalid flags and failed-open recovery. Mouse-event tests populate native SDL
 unions and queue events to check copied precision, direction, touch origin and
 window IDs, plus the older-SDL precision fallback. Gameplay tests check wheel
 input changes Crater Command's next shot and packed fonts back cached labels.
+Native-format tests cover padded rows, palettes and duplicate keyed indices,
+shared subsurface pixels with independent palettes, copies, conversions, decoded image
+format preservation, strided live arrays and native-width transform pixels.
+Echo Grove tests verify palette changes follow its remaining mistake lives.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
 The retained-text fixture compares immediate reuse. The local pygame build's

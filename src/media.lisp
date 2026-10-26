@@ -49,19 +49,28 @@
 
 (defun get-extended () t)
 (defun get-sdl-image-version () (sdl2-image:linked-version))
-(defgeneric load (source &key namehint)
+(defgeneric load (source &key namehint preserve-format)
   (:documentation "Decode an image pathname, binary stream, or encoded octet vector into an owned Surface.
-NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in-memory data."))
-(defmethod load ((filename (eql nil)) &key namehint)
+NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in-memory data.
+When PRESERVE-FORMAT is true, retain SDL_image's decoded pixel format and palette."))
+(defun %check-preserve-format (value)
+  (unless (member value '(nil t))
+    (error 'type-error :datum value :expected-type 'boolean))
+  value)
+(defmethod load ((filename (eql nil)) &key namehint preserve-format)
   (declare (ignore namehint))
+  (%check-preserve-format preserve-format)
   (error 'type-error :datum filename :expected-type '(or pathname string stream (vector (unsigned-byte 8)))))
-(defmethod load ((filename pathname) &key namehint)
+(defmethod load ((filename pathname) &key namehint preserve-format)
   (declare (ignore namehint))
-  ;; Decode an image file into an owned, normalized Surface.
-  (pixelisp.internal:wrap-surface (sdl2-image:load-image filename) :owned t :alpha t))
-(defmethod load ((filename string) &key namehint)
+  (%check-preserve-format preserve-format)
+  (pixelisp.internal:wrap-surface (sdl2-image:load-image filename) :owned t :alpha t
+                                  :preserve-format preserve-format))
+(defmethod load ((filename string) &key namehint preserve-format)
   (declare (ignore namehint))
-  (pixelisp.internal:wrap-surface (sdl2-image:load-image filename) :owned t :alpha t))
+  (%check-preserve-format preserve-format)
+  (pixelisp.internal:wrap-surface (sdl2-image:load-image filename) :owned t :alpha t
+                                  :preserve-format preserve-format))
 (defun %normalize-namehint (namehint)
   "Return a supported SDL_image format name, or NIL when no hint was supplied."
   (when namehint
@@ -78,13 +87,15 @@ NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in
         (error 'pixelisp:error :operation 'load
                :message (format nil "Unsupported image name hint: ~A" text)))
       format)))
-(defun load-bytes (bytes &key namehint)
-  "Decode encoded image-file octets into an owned Surface. FROM-BYTES remains for raw pixels."
-  (%load-encoded-octets bytes namehint))
-(defun %load-encoded-octets (bytes namehint)
+(defun load-bytes (bytes &key namehint preserve-format)
+  "Decode encoded image-file octets into an owned Surface. FROM-BYTES remains for raw pixels.
+When PRESERVE-FORMAT is true, retain SDL_image's decoded pixel format and palette."
+  (%load-encoded-octets bytes namehint preserve-format))
+(defun %load-encoded-octets (bytes namehint preserve-format)
   "Decode encoded file bytes while retaining their owned CFFI copy through SDL_image."
   ;; Validate the hint before allocating any native resources.
-  (let ((format (%normalize-namehint namehint)))
+  (let ((preserve-format (%check-preserve-format preserve-format))
+        (format (%normalize-namehint namehint)))
     (unless (typep bytes '(vector (unsigned-byte 8)))
       (error 'type-error :datum bytes :expected-type '(vector (unsigned-byte 8))))
     (let ((length (length bytes)))
@@ -109,13 +120,15 @@ NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in
                         (when (cffi:null-pointer-p native)
                           (error 'pixelisp:error :operation 'load
                                  :message (or (%sdl-error) "Unsupported or malformed image data")))
-                        (pixelisp.internal:wrap-surface native :owned t :alpha t))
+                        (pixelisp.internal:wrap-surface native :owned t :alpha t
+                                                        :preserve-format preserve-format))
                    (%rw-close rw))))
           (cffi:foreign-free memory))))))
-(defmethod load ((bytes vector) &key namehint)
-  (load-bytes bytes :namehint namehint))
-(defmethod load ((stream stream) &key namehint)
+(defmethod load ((bytes vector) &key namehint preserve-format)
+  (load-bytes bytes :namehint namehint :preserve-format preserve-format))
+(defmethod load ((stream stream) &key namehint preserve-format)
   "Decode encoded bytes from STREAM without closing the caller-owned stream."
+  (%check-preserve-format preserve-format)
   (unless (and (input-stream-p stream)
                (subtypep (stream-element-type stream) '(unsigned-byte 8)))
     (error 'simple-type-error :datum stream :expected-type 'stream
@@ -125,7 +138,7 @@ NAMEHINT is an optional SDL_image format name (for example, \"PNG\") used for in
   (let ((bytes (make-array 0 :element-type '(unsigned-byte 8)
                             :adjustable t :fill-pointer 0)))
     (loop for byte = (read-byte stream nil nil) while byte do (vector-push-extend byte bytes))
-    (%load-encoded-octets bytes namehint)))
+    (%load-encoded-octets bytes namehint preserve-format)))
 (cffi:defcfun ("IMG_SaveJPG" %save-jpg) :int (surface :pointer) (file :string) (quality :int))
 (cffi:defcfun ("SDL_SaveBMP_RW" %save-bmp) :int (surface :pointer) (rw :pointer) (free :int))
 (cffi:defcfun ("SDL_RWFromFile" %rw-file) :pointer (file :string) (mode :string))

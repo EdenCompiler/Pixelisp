@@ -32,6 +32,21 @@
 (cffi:defcfun ("SDL_FreeSurface" %free-surface) :void (surface :pointer))
 (cffi:defcfun ("SDL_CreateRGBSurfaceWithFormatFrom" %surface-from-format) :pointer
   (pixels :pointer) (w :int) (h :int) (depth :int) (pitch :int) (format :uint32))
+(cffi:defcfun ("SDL_CreateRGBSurface" %create-surface) :pointer
+  (flags :uint32) (w :int) (h :int) (depth :int)
+  (r :uint32) (g :uint32) (b :uint32) (a :uint32))
+(cffi:defcfun ("SDL_MasksToPixelFormatEnum" %mask-format) :uint32
+  (bits :int) (r :uint32) (g :uint32) (b :uint32) (a :uint32))
+(cffi:defcfun ("SDL_SetPaletteColors" %set-palette-colors) :int
+  (palette :pointer) (colors :pointer) (first :int) (count :int))
+(cffi:defcfun ("SDL_GetColorKey" %get-color-key) :int (surface :pointer) (key :pointer))
+;; These public SDL2 structure prefixes also describe custom formats whose
+;; masks have no SDL pixel-format enum. CFFI supplies native pointer alignment.
+(cffi:defcstruct pixel-format-header
+  (format :uint32) (palette :pointer) (bits :uint8) (bytes :uint8) (padding :uint16)
+  (r :uint32) (g :uint32) (b :uint32) (a :uint32))
+(cffi:defcstruct palette-header (count :int) (colors :pointer))
+(cffi:defcstruct palette-color (r :uint8) (g :uint8) (b :uint8) (a :uint8))
 (defmacro with-native-rect ((name rectangle) &body body)
   `(let ((value (as-rect ,rectangle)))
      (cffi:with-foreign-object (,name '(:struct native-rect))
@@ -65,19 +80,92 @@
   surface)
 (defun pixelisp.internal:surface-handle (surface)
   (check-surface surface) (pixelisp.internal:handle surface))
-(defun make-surface (size &key (alpha nil))
-  "Create an owned 32-bit software image. ALPHA enables per-pixel transparency."
+(defun %default-masks (depth alpha)
+  (case depth
+    (8 '(0 0 0 0))
+    (12 '(#x0f00 #x00f0 #x000f 0))
+    (15 '(#x7c00 #x03e0 #x001f 0))
+    (16 (if alpha '(#x0f00 #x00f0 #x000f #xf000) '(#xf800 #x07e0 #x001f 0)))
+    (24 '(#xff #xff00 #xff0000 0))
+    (32 (list #xff #xff00 #xff0000 (if alpha #xff000000 0)))))
+
+(defun %validated-masks (depth alpha masks)
+  "Reject overlapping, noncontiguous, or out-of-depth channels before SDL."
+  (unless (member depth '(8 12 15 16 24 32))
+    (error 'pixelisp:unsupported-feature :operation 'make-surface
+           :message "Surface depth must be 8, 12, 15, 16, 24, or 32."))
+  (when (and alpha (not (member depth '(16 32))))
+    (error 'pixelisp:unsupported-feature :operation 'make-surface
+           :message "Per-pixel alpha requires a 16-bit or 32-bit surface."))
+  (let ((values (if masks
+                    (progn
+                      (unless (and (typep masks 'sequence) (not (stringp masks)) (= (length masks) 4))
+                        (error "Pixel masks must be a sequence of four integers."))
+                      (coerce masks 'list))
+                    (%default-masks depth alpha)))
+        (used 0))
+    (dolist (mask values)
+      (unless (and (integerp mask) (<= 0 mask) (< mask (ash 1 depth)))
+        (error 'type-error :datum mask :expected-type `(integer 0 ,(1- (ash 1 depth)))))
+      (when (plusp mask)
+        ;; Removing trailing zero bits turns a contiguous field into 2^n - 1.
+        (let* ((lowest-bit (logand mask (- mask)))
+               (shift (1- (integer-length lowest-bit)))
+               (field (ash mask (- shift))))
+          (unless (and (zerop (logand field (1+ field))) (<= (logcount mask) 8))
+            (error "Each pixel channel must contain at most eight contiguous bits."))))
+      (unless (zerop (logand mask used)) (error "Pixel channel masks must not overlap."))
+      (setf used (logior used mask)))
+    (when (if (= depth 8) (plusp used) (some #'zerop (subseq values 0 3)))
+      (error "Indexed surfaces require zero masks; true-color surfaces require RGB masks."))
+    (when (and masks (not (eql (not (zerop (fourth values))) (not (null alpha)))))
+      (error "The alpha mask must agree with the :ALPHA argument."))
+    (when (zerop (apply #'pixelisp.internal::%mask-format depth values))
+      (error 'pixelisp:unsupported-feature :operation 'make-surface
+             :message "SDL does not support this combination of depth and channel masks."))
+    values))
+
+(declaim (ftype function get-bitsize get-masks set-palette get-palette))
+(defun make-surface (size &key (alpha nil) (depth 32) masks)
+  "Create an owned image with 8/12/15/16/24/32-bit pixels and optional RGB(A) masks."
+  (let ((masks (%validated-masks depth alpha masks)))
   (multiple-value-bind (w h) (pixelisp.internal:pair size)
-    (check-type w (integer 1 *)) (check-type h (integer 1 *))
-    (let* ((native (sdl2:create-rgb-surface w h 32 :r-mask #xff :g-mask #xff00
-                                          :b-mask #xff0000 :a-mask (if alpha #xff000000 0)))
-           (object (make-instance 'surface :handle native :width w :height h :alpha alpha
-                                  :clip (pixelisp:make-rect 0 0 w h))))
-      (when (cffi:null-pointer-p (pixelisp.internal::%ptr native))
+    (check-type w (integer 1 #x7fffffff)) (check-type h (integer 1 #x7fffffff))
+    (let* ((raw (apply #'pixelisp.internal::%create-surface 0 w h depth masks))
+           (object nil) (complete nil))
+      (when (cffi:null-pointer-p raw)
         (pixelisp.internal:native-error 'make-surface))
-      (pixelisp.internal::%set-blend (pixelisp.internal::%ptr native) (if alpha 1 0))
-      (pixelisp.internal:register-resource object)
-      (fill object (if alpha '(0 0 0 0) '(0 0 0))) object)))
+      (unwind-protect
+           (progn
+             (setf object (make-instance 'surface
+                             :handle (autowrap:wrap-pointer raw 'sdl2-ffi:sdl-surface)
+                             :width w :height h :alpha (not (null alpha))
+                             :clip (pixelisp:make-rect 0 0 w h)))
+             (when (minusp (pixelisp.internal::%set-blend raw (if alpha 1 0)))
+               (pixelisp.internal:native-error 'make-surface))
+             ;; Start indexed images with the conventional RGB332 palette.
+             ;; Games can replace it without rewriting any stored pixel index.
+             (when (= depth 8)
+               (set-palette object
+                 (loop for index below 256 collect
+                   (list (round (* 255 (ldb (byte 3 5) index)) 7)
+                         (round (* 255 (ldb (byte 3 2) index)) 7)
+                         (* 85 (ldb (byte 2 0) index))))))
+             (pixelisp.internal:register-resource object)
+             (setf complete t)
+             object)
+        (unless complete (pixelisp.internal::%free-surface raw)))))))
+
+(defun %make-like (source size)
+  "Allocate independent storage with SOURCE's pixel layout and palette."
+  (check-surface source)
+  (let ((result (make-surface size :depth (get-bitsize source) :masks (get-masks source)
+                                   :alpha (alpha-p source))))
+    (handler-case
+        (progn
+          (when (= (get-bitsize source) 8) (set-palette result (get-palette source)))
+          result)
+      (error (condition) (dispose result) (error condition)))))
 (setf (fdefinition 'pixelisp:make-surface) #'make-surface)
 (defun pixelisp.internal:wrap-surface (native &key (owned t) (alpha t) parent preserve-format)
   "Normalize a native image or retain its format. OWNED consumes it even on failure."
@@ -100,7 +188,12 @@
                    (setf result
                          (make-instance 'surface :handle wrapped
                            :width (sdl2:surface-width wrapped) :height (sdl2:surface-height wrapped)
-                           :alpha alpha :owned owned :parent parent
+                           :alpha (not (zerop
+                                         (cffi:foreign-slot-value
+                                           (pixelisp.internal:%ptr (sdl2:surface-format wrapped))
+                                           '(:struct pixelisp.internal::pixel-format-header)
+                                           'pixelisp.internal::a)))
+                           :owned owned :parent parent
                            :clip (pixelisp:make-rect 0 0 (sdl2:surface-width wrapped)
                                                         (sdl2:surface-height wrapped))))
                    ;; The result owns RAW now, including if registration fails.
@@ -172,25 +265,97 @@
   (check-surface surface)
   (sdl2:surface-pitch (pixelisp.internal:handle surface)))
 (defun %format-description (surface)
-  "Read format metadata through SDL rather than assuming native C struct offsets."
+  "Read native masks even when a custom layout has no SDL format enum."
   (check-surface surface)
-  (cffi:with-foreign-objects ((bits :int) (r :uint32) (g :uint32) (b :uint32) (a :uint32))
-    (when (zerop (pixelisp.internal::%pixel-format-masks
-                  (plus-c:c-ref (pixelisp.internal:handle surface) sdl2-ffi:sdl-surface :format :format)
-                  bits r g b a))
-      (pixelisp.internal:native-error 'get-masks))
-    (values (cffi:mem-ref bits :int)
-            (list (cffi:mem-ref r :uint32) (cffi:mem-ref g :uint32)
-                  (cffi:mem-ref b :uint32) (cffi:mem-ref a :uint32)))))
+  (let ((format (pixelisp.internal:%ptr (sdl2:surface-format (pixelisp.internal:handle surface)))))
+    (values (cffi:foreign-slot-value format '(:struct pixelisp.internal::pixel-format-header) 'pixelisp.internal::bits)
+            (loop for channel in '(pixelisp.internal::r pixelisp.internal::g pixelisp.internal::b pixelisp.internal::a)
+                  collect (cffi:foreign-slot-value format '(:struct pixelisp.internal::pixel-format-header) channel)))))
 (defun get-bitsize (surface)
-  "Return the native pixel depth in bits; current public formats are all 32-bit."
+  "Return the native pixel depth in bits."
   (nth-value 0 (%format-description surface)))
 (defun get-bytesize (surface)
   "Return the number of storage bytes per pixel."
-  (ceiling (get-bitsize surface) 8))
+  (check-surface surface)
+  (cffi:foreign-slot-value (pixelisp.internal:%ptr (sdl2:surface-format (pixelisp.internal:handle surface)))
+                           '(:struct pixelisp.internal::pixel-format-header) 'pixelisp.internal::bytes))
 (defun get-masks (surface)
   "Return a fresh list of the packed red, green, blue, and alpha bit masks."
   (nth-value 1 (%format-description surface)))
+
+(defun %palette-pointer (surface operation)
+  "Get the native palette after checking the surface's type and lifetime."
+  (check-surface surface)
+  (let* ((format (pixelisp.internal:%ptr (sdl2:surface-format (pixelisp.internal:handle surface))))
+         (palette (cffi:foreign-slot-value format '(:struct pixelisp.internal::pixel-format-header)
+                                           'pixelisp.internal::palette)))
+    (when (cffi:null-pointer-p palette)
+      (error 'pixelisp:unsupported-feature :operation operation
+             :message "Only indexed 8-bit surfaces have a color palette."))
+    palette))
+
+(defun %palette-index (palette index)
+  (let ((count (cffi:foreign-slot-value palette '(:struct pixelisp.internal::palette-header)
+                                      'pixelisp.internal::count)))
+    (unless (and (integerp index) (<= 0 index) (< index count))
+      (error 'type-error :datum index :expected-type `(integer 0 ,(1- count))))
+    index))
+
+(defun get-palette-at (surface index)
+  "Return a fresh Color for palette INDEX."
+  (let* ((palette (%palette-pointer surface 'get-palette-at))
+         (index (%palette-index palette index))
+         (colors (cffi:foreign-slot-value palette '(:struct pixelisp.internal::palette-header)
+                                          'pixelisp.internal::colors))
+         (color (cffi:mem-aptr colors '(:struct pixelisp.internal::palette-color) index)))
+    (apply #'pixelisp:make-color
+           (loop for channel in '(pixelisp.internal::r pixelisp.internal::g pixelisp.internal::b pixelisp.internal::a)
+                 collect (cffi:foreign-slot-value color '(:struct pixelisp.internal::palette-color) channel)))))
+
+(defun get-palette (surface)
+  "Return independent Colors for all entries in an indexed surface's palette."
+  (let ((palette (%palette-pointer surface 'get-palette)))
+    (loop for index below (cffi:foreign-slot-value palette '(:struct pixelisp.internal::palette-header)
+                                                  'pixelisp.internal::count)
+          collect (get-palette-at surface index))))
+
+(defun %opaque-palette-color (color)
+  (let ((color (px.color:parse color)))
+    (unless (= 255 (pixelisp:color-a color))
+      (error 'pixelisp:unsupported-feature :operation 'set-palette
+             :message "Palette entries must be opaque RGB colors; use a color key for transparency."))
+    color))
+
+(defun %write-palette (palette start colors operation)
+  (unless (null colors)
+    (cffi:with-foreign-object (native '(:struct pixelisp.internal::palette-color) (length colors))
+      (loop for color in colors for index from 0
+            for entry = (cffi:mem-aptr native '(:struct pixelisp.internal::palette-color) index) do
+              (loop for channel in '(pixelisp.internal::r pixelisp.internal::g pixelisp.internal::b pixelisp.internal::a)
+                    for value in (px.color:to-list color) do
+                      (setf (cffi:foreign-slot-value entry '(:struct pixelisp.internal::palette-color) channel) value)))
+      (when (minusp (pixelisp.internal::%set-palette-colors palette native start (length colors)))
+        (pixelisp.internal:native-error operation))))
+  colors)
+
+(defun set-palette (surface colors)
+  "Replace the palette prefix with COLORS, validating the complete input first."
+  (let* ((palette (%palette-pointer surface 'set-palette))
+         (count (cffi:foreign-slot-value palette '(:struct pixelisp.internal::palette-header) 'pixelisp.internal::count)))
+    (unless (and (typep colors 'sequence) (not (stringp colors)) (<= (length colors) count))
+      (error "Palette colors must be a sequence with at most ~D entries." count))
+    ;; Decode every entry before making a native call; a bad last entry cannot
+    ;; partially replace the palette. SDL invalidates cached blit maps for us.
+    (%write-palette palette 0 (map 'list #'%opaque-palette-color colors) 'set-palette))
+  colors)
+
+(defun set-palette-at (surface index color)
+  "Replace one palette color; existing indexed pixels immediately use it."
+  (let* ((palette (%palette-pointer surface 'set-palette-at))
+         (index (%palette-index palette index))
+         (parsed (%opaque-palette-color color)))
+    (%write-palette palette index (list parsed) 'set-palette-at))
+  color)
 (defun %mask-shift (mask)
   (if (zerop mask) 0
       (loop for shift from 0 below 32
@@ -221,6 +386,10 @@ Unrecognized SDL modes are returned as their exact integer value."
   "Convert a native packed pixel to a fresh Color; signed 32-bit values are accepted."
   (check-surface surface)
   (check-type pixel (integer -2147483648 4294967295))
+  (when (< (get-bytesize surface) 4)
+    (let ((maximum (1- (ash 1 (* 8 (get-bytesize surface))))))
+      (unless (<= 0 pixel maximum)
+        (error 'type-error :datum pixel :expected-type `(integer 0 ,maximum)))))
   (cffi:with-foreign-objects ((r :uint8) (g :uint8) (b :uint8) (a :uint8))
     (pixelisp.internal::%get-rgba
      (ldb (byte 32 0) pixel)
@@ -359,7 +528,43 @@ https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE and SDL2/SDL_MUSTLOCK."
   enabled)
 (defun pixel-pointer (surface x y)
   (cffi:inc-pointer (sdl2:surface-pixels (pixelisp.internal:handle surface))
-                    (+ (* y (sdl2:surface-pitch (pixelisp.internal:handle surface))) (* x 4))))
+                    (+ (* y (sdl2:surface-pitch (pixelisp.internal:handle surface)))
+                       (* x (get-bytesize surface)))))
+
+(defun %little-endian-p ()
+  (cffi:with-foreign-object (word :uint16)
+    (setf (cffi:mem-ref word :uint16) 1)
+    (= 1 (cffi:mem-ref word :uint8))))
+
+(defun %read-packed-pixel (surface x y)
+  "Read native pixel storage. The caller holds a lock and validates coordinates."
+  (let ((pointer (pixel-pointer surface x y)))
+    (case (get-bytesize surface)
+      (1 (cffi:mem-ref pointer :uint8))
+      (2 (cffi:mem-ref pointer :uint16))
+      (4 (cffi:mem-ref pointer :uint32))
+      (3 (let ((little (%little-endian-p)))
+           ;; A 32-bit load here would overread the last pixel of an unpadded
+           ;; row. Assemble exactly three bytes, in native packed-pixel order.
+           (loop for index below 3 sum
+             (ash (cffi:mem-aref pointer :uint8 index)
+                  (* 8 (if little index (- 2 index))))))))))
+
+(defun %write-packed-pixel (surface x y value)
+  "Write native storage without the drawing clip. The caller holds a lock."
+  (let* ((bytes (get-bytesize surface)) (maximum (1- (ash 1 (* bytes 8))))
+         (pointer (pixel-pointer surface x y)))
+    (unless (and (integerp value) (<= 0 value maximum))
+      (error 'type-error :datum value :expected-type `(integer 0 ,maximum)))
+    (case bytes
+      (1 (setf (cffi:mem-ref pointer :uint8) value))
+      (2 (setf (cffi:mem-ref pointer :uint16) value))
+      (4 (setf (cffi:mem-ref pointer :uint32) value))
+      (3 (let ((little (%little-endian-p)))
+           (dotimes (index 3)
+             (setf (cffi:mem-aref pointer :uint8 index)
+                   (ldb (byte 8 (* 8 (if little index (- 2 index)))) value))))))
+  value))
 (defun get-at (surface position)
   "Read an RGBA color, checking bounds and the complete owner chain."
   (check-surface surface)
@@ -370,7 +575,7 @@ https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE and SDL2/SDL_MUSTLOCK."
     (unwind-protect
          (cffi:with-foreign-objects ((r :uint8) (g :uint8) (b :uint8) (a :uint8))
            (pixelisp.internal::%get-rgba
-            (cffi:mem-ref (pixel-pointer surface x y) :uint32)
+            (%read-packed-pixel surface x y)
             (pixelisp.internal::%ptr (sdl2:surface-format (pixelisp.internal:handle surface))) r g b a)
            (pixelisp:make-color (cffi:mem-ref r :uint8) (cffi:mem-ref g :uint8)
                                 (cffi:mem-ref b :uint8) (cffi:mem-ref a :uint8)))
@@ -383,8 +588,21 @@ https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE and SDL2/SDL_MUSTLOCK."
                  (<= 0 y) (< y (height surface)))
       (error "Pixel ~S is outside surface ~S." position (size surface)))
     (lock surface)
-    (unwind-protect (cffi:mem-ref (pixel-pointer surface x y) :uint32)
+    (unwind-protect (%read-packed-pixel surface x y)
       (unlock surface))))
+(defun set-at-mapped (surface position value)
+  "Write a native packed pixel inside the clip; palette indices are ordinary integers."
+  (check-surface surface)
+  (let ((maximum (1- (ash 1 (* 8 (get-bytesize surface))))))
+    (unless (and (integerp value) (<= 0 value maximum))
+      (error 'type-error :datum value :expected-type `(integer 0 ,maximum))))
+  (multiple-value-bind (x y) (pixelisp.internal:pair position)
+    (unless (and (integerp x) (integerp y) (<= 0 x) (< x (width surface)) (<= 0 y) (< y (height surface)))
+      (error "Pixel ~S is outside surface ~S." position (size surface)))
+    (when (px.rect:collide-point (clip-rect surface) position)
+      (lock surface)
+      (unwind-protect (%write-packed-pixel surface x y value) (unlock surface))))
+  value)
 (defun set-at (surface position color)
   "Write one pixel inside the current clip; out-of-clip writes do nothing."
   (check-surface surface)
@@ -401,9 +619,9 @@ https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE and SDL2/SDL_MUSTLOCK."
     (multiple-value-bind (r g b a) (pixelisp.internal:rgba color)
       (lock surface)
       (unwind-protect
-           (setf (cffi:mem-ref (pixel-pointer surface x y) :uint32)
-                 (pixelisp.internal::%map-rgba
-                  (pixelisp.internal::%ptr (sdl2:surface-format (pixelisp.internal:handle surface))) r g b a))
+           (%write-packed-pixel surface x y
+             (pixelisp.internal::%map-rgba
+              (pixelisp.internal::%ptr (sdl2:surface-format (pixelisp.internal:handle surface))) r g b a))
         (unlock surface)))) color)
 (defun get-clip (surface) (check-surface surface) (px.rect:copy (clip-rect surface)))
 (defun set-clip (surface &optional rectangle)
@@ -504,11 +722,22 @@ https://www.pygame.org/docs/ref/surface.html#pygame.Surface.set_alpha."
   (pixelisp.internal::%set-blend (pixelisp.internal::%ptr (pixelisp.internal:handle surface))
                                (if (or (alpha-p surface) (and alpha (< alpha 255))) 1 0))
   (setf (alpha-value surface) alpha))
-(defun get-colorkey (surface)
-  "Return an independent Color for the native transparent key, or NIL."
+(defun %native-colorkey (surface)
+  "Return the native transparent pixel/index, or NIL when keying is disabled."
   (check-surface surface)
-  (when (colorkey surface)
-    (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba (colorkey surface)))))
+  (cffi:with-foreign-object (key :uint32)
+    (when (zerop (pixelisp.internal::%get-color-key
+                  (pixelisp.internal:%ptr (pixelisp.internal:handle surface)) key))
+      (cffi:mem-ref key :uint32))))
+(defun get-colorkey (surface)
+  "Return the key's current color, including any palette changes, or NIL."
+  (let ((key (%native-colorkey surface)))
+    (when key (unmap-rgb surface key))))
+(defun %colorkey-pixel-p (surface pixel key)
+  "Match palette indices exactly, or RGB fields independently of pixel alpha."
+  (if (= 8 (get-bitsize surface)) (= pixel key)
+      (let ((rgb-mask (reduce #'logior (subseq (get-masks surface) 0 3))))
+        (= (logand pixel rgb-mask) (logand key rgb-mask)))))
 (defun set-colorkey (surface color &key (rle nil rle-p))
   "Set a transparent color and optionally SDL's RLE acceleration hint.
 The optional :RLE behavior follows pygame's Surface.set_colorkey flags
@@ -516,12 +745,16 @@ argument; RLE sources can be faster to blit and slower to modify. See
 https://www.pygame.org/docs/ref/surface.html#pygame.Surface.set_colorkey."
   (check-surface surface)
   (when rle-p (%validate-rle-change surface rle 'set-colorkey))
-  (let ((key (when color (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba color)))))
+  (let* ((packed (when color (if (integerp color)
+                                 (progn
+                                   (unless (<= 0 color (1- (ash 1 (* 8 (get-bytesize surface)))))
+                                     (error "The color key does not fit this surface's native pixel."))
+                                   color)
+                                 (map-rgb surface color))))
+         (key (when packed (unmap-rgb surface packed))))
     (when rle-p (set-rle surface rle))
     (sdl2:set-color-key (pixelisp.internal:handle surface) (if key :true :false)
-                       (if key (multiple-value-bind (r g b a) (pixelisp.internal:rgba key)
-                                 (pixelisp.internal::%map-rgba
-                                  (pixelisp.internal::%ptr (sdl2:surface-format (pixelisp.internal:handle surface))) r g b a)) 0))
+                       (or packed 0))
     (setf (colorkey surface) key)) color)
 (defun %blit-native (target source dest area)
   "Copy SOURCE onto TARGET, applying SOURCE transparency and TARGET clipping."
@@ -649,16 +882,75 @@ Use the result with :BLEND-PREMULTIPLIED. This does not mutate the input."
           result)
       (error (condition) (dispose result) (error condition)))))
 (defun copy (surface)
+  "Copy native pixels and palette independently, retaining transparency settings."
   (check-surface surface)
-  (let ((result (make-surface (size surface) :alpha (alpha-p surface))))
-    (dotimes (y (height surface)) (dotimes (x (width surface)) (set-at result (list x y) (get-at surface (list x y)))))
-    (set-alpha result (get-alpha surface)) (set-colorkey result (get-colorkey surface))
-    (when (rle-enabled-p surface) (set-rle result t)) result))
-(defun convert (surface) (let ((out (make-surface (size surface))))
-                    (dotimes (y (height surface)) (dotimes (x (width surface)) (set-at out (list x y) (get-at surface (list x y))))) out))
+  (let ((result (%make-like surface (size surface))))
+    (handler-case
+        (progn
+          (lock surface)
+          (unwind-protect
+               (progn
+                 (lock result)
+                 (unwind-protect
+                      (dotimes (y (height surface))
+                        (dotimes (x (width surface))
+                          (%write-packed-pixel result x y (%read-packed-pixel surface x y))))
+                   (unlock result)))
+            (unlock surface))
+          (set-alpha result (get-alpha surface))
+          (set-colorkey result (%native-colorkey surface))
+          (when (rle-enabled-p surface) (set-rle result t))
+          result)
+      (error (condition) (dispose result) (error condition)))))
+
+(defun convert (surface &optional format &key masks)
+  "Copy colors into an opaque surface. FORMAT is a depth or a template Surface."
+  (check-surface surface)
+  (let* ((template (when (typep format 'surface) (check-surface format)))
+         (requested-depth (cond (template (get-bitsize template)) ((null format) 32)
+                      ((integerp format) format)
+                      (t (error 'type-error :datum format :expected-type '(or null integer surface)))))
+         (masks (or masks (when template (append (subseq (get-masks template) 0 3) '(0)))))
+         ;; Removing alpha from RGBA4444 leaves RGB444: SDL reports 12 color
+         ;; bits for that layout, although both formats use two storage bytes.
+         (depth (if (and template masks
+                         (zerop (apply #'pixelisp.internal::%mask-format requested-depth masks)))
+                    (integer-length (reduce #'logior (subseq masks 0 3)))
+                    requested-depth))
+         (result (make-surface (size surface) :depth depth :masks masks)))
+    (handler-case
+        (progn
+          (when (and template (= depth 8)) (set-palette result (get-palette template)))
+          (let ((same-layout
+                  (and (= (get-bitsize surface) (get-bitsize result))
+                       (equal (get-masks surface) (get-masks result))
+                       (or (/= depth 8)
+                           (equal (mapcar #'px.color:to-list (get-palette surface))
+                                  (mapcar #'px.color:to-list (get-palette result)))))))
+            (dotimes (y (height surface))
+              (dotimes (x (width surface))
+                (if same-layout
+                    (set-at-mapped result (list x y) (get-at-mapped surface (list x y)))
+                    (set-at result (list x y) (get-at surface (list x y))))))
+            (set-alpha result (get-alpha surface))
+            (set-colorkey result (if same-layout (%native-colorkey surface) (get-colorkey surface))))
+          result)
+      (error (condition) (dispose result) (error condition)))))
 (defun convert-alpha (surface)
-  (let ((out (make-surface (size surface) :alpha t)))
-    (dotimes (y (height surface)) (dotimes (x (width surface)) (set-at out (list x y) (get-at surface (list x y))))) out))
+  "Copy stored colors to RGBA32, baking the source color key into pixel alpha."
+  (check-surface surface)
+  (let ((result (make-surface (size surface) :alpha t)) (key (%native-colorkey surface)))
+    (handler-case
+        (progn
+          (dotimes (y (height surface))
+            (dotimes (x (width surface))
+              (let* ((position (list x y)) (color (get-at surface position)))
+                (when (and key (%colorkey-pixel-p surface (get-at-mapped surface position) key))
+                  (setf (pixelisp:color-a color) 0))
+                (set-at result position color))))
+          (set-alpha result (or (get-alpha surface) 255))
+          result)
+      (error (condition) (dispose result) (error condition)))))
 (defun subsurface (surface rectangle)
   "Create a shared view with its parent's pixel format and row pitch."
   (check-surface surface)
@@ -671,18 +963,27 @@ Use the result with :BLEND-PREMULTIPLIED. This does not mutate the input."
          (w (px.rect:width r)) (h (px.rect:height r)))
     (unless (and (plusp w) (plusp h) (px.rect:contains (get-rect surface) r))
       (error "Subsurface rectangle must be nonempty and contained in its parent."))
-    (let* ((raw (pixelisp.internal::%surface-from-format
-                 (pixel-pointer surface (px.rect:x r) (px.rect:y r)) w h 32
-                 (sdl2:surface-pitch (pixelisp.internal:handle surface))
-                 (plus-c:c-ref (pixelisp.internal:handle surface) sdl2-ffi:sdl-surface :format :format)))
-           (native (autowrap:wrap-pointer raw 'sdl2-ffi:sdl-surface)))
+    (let* ((raw (apply #'pixelisp.internal::%surface-from
+                 (pixel-pointer surface (px.rect:x r) (px.rect:y r)) w h (get-bitsize surface)
+                 (sdl2:surface-pitch (pixelisp.internal:handle surface)) (get-masks surface)))
+           (child nil) (complete nil))
       (when (cffi:null-pointer-p raw) (pixelisp.internal:native-error 'subsurface))
-      (let ((child (pixelisp.internal:register-resource
-                    (make-instance 'surface :handle native :width w :height h :alpha (alpha-p surface)
-                                   :parent surface :offset (list (px.rect:x r) (px.rect:y r))
-                                   :clip (pixelisp:make-rect 0 0 w h)))))
-        (set-alpha child (get-alpha surface))
-        (set-colorkey child (get-colorkey surface)) child))))
+      (unwind-protect
+           (progn
+             (setf child (make-instance 'surface :handle (autowrap:wrap-pointer raw 'sdl2-ffi:sdl-surface)
+                                    :width w :height h :alpha (alpha-p surface)
+                                    :parent surface :offset (list (px.rect:x r) (px.rect:y r))
+                                    :clip (pixelisp:make-rect 0 0 w h)))
+             (when (= (get-bitsize surface) 8)
+               ;; As in pygame, pixel indices alias the parent, while the
+               ;; child's palette and other surface state remain independent.
+               (set-palette child (get-palette surface)))
+             (set-alpha child (get-alpha surface))
+             (set-colorkey child (%native-colorkey surface))
+             (pixelisp.internal:register-resource child)
+             (setf complete t)
+             child)
+        (unless complete (pixelisp.internal::%free-surface raw))))))
 (defun scroll (surface dx dy)
   (let ((snapshot (copy surface)))
     (unwind-protect
@@ -691,18 +992,17 @@ Use the result with :BLEND-PREMULTIPLIED. This does not mutate the input."
              (loop for x from (px.rect:left clip) below (px.rect:right clip)
                    for sx = (- x dx) for sy = (- y dy)
                    when (px.rect:collide-point clip (list sx sy))
-                     do (set-at surface (list x y) (get-at snapshot (list sx sy))))))
+                     do (set-at-mapped surface (list x y) (get-at-mapped snapshot (list sx sy))))))
       (dispose snapshot))) surface)
 (defun get-bounding-rect (surface &optional (min-alpha 1))
   "Find the smallest rectangle containing non-keyed pixels above MIN-ALPHA."
   (let ((left (width surface)) (top (height surface)) (right 0) (bottom 0)
-        (key (when (get-colorkey surface)
-               (subseq (px.color:to-list (get-colorkey surface)) 0 3))))
+        (key (%native-colorkey surface)))
     (dotimes (y (height surface))
       (dotimes (x (width surface))
         (let ((color (get-at surface (list x y))))
           (when (and (>= (pixelisp:color-a color) min-alpha)
-                     (not (and key (equal key (subseq (px.color:to-list color) 0 3)))))
+                     (not (and key (%colorkey-pixel-p surface (get-at-mapped surface (list x y)) key))))
             (setf left (min left x) top (min top y)
                   right (max right (1+ x)) bottom (max bottom (1+ y)))))))
     (if (zerop right) (pixelisp:make-rect 0 0 0 0) (pixelisp:make-rect left top (- right left) (- bottom top)))))

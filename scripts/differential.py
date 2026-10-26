@@ -49,7 +49,79 @@ CASE_NAMES = [
     "encoded image output", "music memory playback", "FreeType retained text and bitmap settings",
     "sprite image crops", "RenderUpdates damage", "float32 sound arrays", "native display mode queries",
     "encoded font input", "mixer output selection and defaults",
+    "indexed palettes and subsurfaces", "native pixel widths",
+    "indexed nearest transforms", "indexed image decoding",
 ]
+
+
+def indexed_palettes_and_subsurfaces():
+    source = pygame.Surface((3, 2), 0, 8)
+    source.set_palette([(0, 0, 0), (20, 30, 40), (20, 30, 40), (80, 90, 100)])
+    for index, pixel in enumerate([0, 1, 2, 3, 1, 2]):
+        source.set_at((index % 3, index // 3), pixel)
+    source.set_colorkey(2)
+    copied = source.copy()
+    child = source.subsurface((1, 0, 2, 2))
+    child.set_palette_at(1, (110, 120, 130))
+    child.set_at((0, 1), 3)
+    source.set_palette_at(2, (150, 160, 170))
+    packed = lambda surface: [surface.get_at_mapped((x, y))
+                               for y in range(surface.get_height())
+                               for x in range(surface.get_width())]
+    # Pygame palette Colors iterate RGB; Pixelisp Colors always have RGBA.
+    return [[list(image.get_palette_at(1))[:3] + [255] for image in [source, child, copied]],
+            packed(source), packed(child), packed(copied),
+            [list(image.get_colorkey()) for image in [source, child, copied]],
+            pygame.surfarray.array_colorkey(source).tolist(),
+            pygame.mask.from_surface(source).count()]
+
+
+def native_pixel_widths():
+    masks = {8: (0, 0, 0, 0), 12: (0xf00, 0xf0, 0xf, 0),
+             15: (0x7c00, 0x3e0, 0x1f, 0), 16: (0xf800, 0x7e0, 0x1f, 0),
+             24: (0xff, 0xff00, 0xff0000, 0), 32: (0xff, 0xff00, 0xff0000, 0)}
+    result = []
+    for depth, channels in masks.items():
+        surface = pygame.Surface((3, 2), 0, depth, channels)
+        if depth == 8:
+            surface.set_palette_at(7, (213, 61, 127))
+            surface.set_at((2, 1), 7)
+        else:
+            surface.set_at((2, 1), (213, 61, 127))
+        copied = surface.copy()
+        result.append([surface.get_bitsize(), surface.get_bytesize(),
+                       list(surface.get_masks()), list(surface.get_at((2, 1))),
+                       surface.get_at_mapped((2, 1)), copied.get_bitsize(),
+                       pygame.surfarray.array2d(surface).tolist()])
+    return result
+
+
+def indexed_nearest_transforms():
+    source = pygame.Surface((2, 2), 0, 8)
+    source.set_palette([(0, 0, 0)] + [(20, 30, 40)] * 4)
+    for index, pixel in enumerate([1, 2, 3, 4]):
+        source.set_at((index % 2, index // 2), pixel)
+    source.set_colorkey(2)
+    result = []
+    for output in [pygame.transform.flip(source, True, False),
+                   pygame.transform.scale(source, (4, 2)),
+                   pygame.transform.scale2x(source), pygame.transform.rotate(source, 90),
+                   pygame.transform.chop(source, (0, 0, 1, 1))]:
+        result.append([output.get_bitsize(), list(output.get_size()),
+                       pygame.surfarray.array2d(output).tolist()])
+    return result
+
+
+def indexed_image_decoding():
+    source = pygame.Surface((3, 1), 0, 8)
+    source.set_palette([(0, 0, 0), (13, 27, 41), (13, 27, 41)])
+    for x, pixel in enumerate([2, 1, 0]):
+        source.set_at((x, 0), pixel)
+    output = BytesIO()
+    pygame.image.save(source, output, "indexed.bmp")
+    decoded = pygame.image.load(BytesIO(output.getvalue()), "indexed.bmp")
+    return [decoded.get_bitsize(), [list(decoded.get_palette_at(i))[:3] + [255] for i in range(3)],
+            pygame.surfarray.array2d(decoded).tolist()]
 
 
 def encoded_font_input():
@@ -1097,6 +1169,8 @@ def reference():
         encoded_image_output(), music_memory_playback(), freetype_retained_text(),
         sprite_image_crops(), render_updates_damage(), float32_sound_arrays(), native_display_mode_queries(),
         encoded_font_input(), mixer_output_selection_and_defaults(),
+        indexed_palettes_and_subsurfaces(), native_pixel_widths(),
+        indexed_nearest_transforms(), indexed_image_decoding(),
     ]
 
 

@@ -96,20 +96,23 @@
         :phase (%echo-state-phase state) :position (%echo-state-position state)
         :pattern (copy-list (%echo-state-pattern state))))
 
-(defun %echo-pad-image (color lit)
-  (let ((image (px.surface:make-surface '(334 132))))
-    (px.surface:fill image (if lit color (mapcar (lambda (c) (round (* c 0.32))) color)))
-    (px.surface:fill image (if lit '(245 250 255) color) '(0 0 334 5))
-    (px.surface:fill image '(8 17 30) '(0 124 334 8))
-    image))
-
 (defun %echo-pad-atlas (colors)
-  "Pack dim/lit frames into one sheet: columns select pads, rows select light."
-  (let ((sheet (px.surface:make-surface '(1336 264))))
+  "Pack dim/lit frames into an indexed sheet with an editable shared palette."
+  (let ((sheet (px.surface:make-surface '(1336 264) :depth 8)))
+    ;; The first ten entries cover the artwork exactly. Each frame stores only
+    ;; their indices; changing entry 8 changes every lit pad's top highlight.
+    (px.surface:set-palette sheet
+      (append (mapcar (lambda (color) (mapcar (lambda (c) (round (* c 0.32))) color)) colors)
+              colors '((245 250 255) (8 17 30))))
     (loop for color in colors for column from 0 do
       (loop for lit in '(nil t) for row from 0 do
-        (px:with-resource (frame (%echo-pad-image color lit))
-          (px.surface:blit sheet frame (list (* column 334) (* row 132))))))
+        (let ((x (* column 334)) (y (* row 132)))
+          ;; Draw directly in the indexed format: converting a 32-bit frame
+          ;; during a native blit can quantize it before palette lookup.
+          (px.surface:fill sheet (if lit color (mapcar (lambda (c) (round (* c 0.32))) color))
+                           (list x y 334 132))
+          (px.surface:fill sheet (if lit '(245 250 255) color) (list x y 334 5))
+          (px.surface:fill sheet '(8 17 30) (list x (+ y 124) 334 8)))))
     sheet))
 
 (defun make-echo-grove (session)
@@ -134,6 +137,10 @@
              :lives (%echo-state-lives state))
        (%text current-session (%echo-state-message state) 450 121 :anchor :center
               :size 21 :color '(216 232 243))
+       ;; A warm highlight warns that only one mistake life remains. Restore
+       ;; the normal palette on restart without rebuilding any sprite pixels.
+       (px.surface:set-palette-at atlas 8
+         (if (= (%echo-state-lives state) 1) '(255 90 60) '(245 250 255)))
        ;; The cue changes the sampled atlas row; all pads keep the same image.
        ;; Screen rectangles stay independent of the source-image coordinates.
        (loop for pad in pads for column from 0

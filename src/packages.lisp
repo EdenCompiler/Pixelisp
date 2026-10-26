@@ -44,7 +44,9 @@
            #:set-colorkey #:subsurface #:scroll #:lock #:unlock #:locked-p #:dispose
            #:with-surface #:get-bounding-rect #:premul-alpha
            #:get-parent #:get-abs-parent #:get-offset #:get-abs-offset
-           #:map-rgb #:unmap-rgb #:get-at-mapped #:get-pitch #:get-bitsize #:get-bytesize #:get-masks
+           #:map-rgb #:unmap-rgb #:get-at-mapped #:set-at-mapped
+           #:get-palette #:get-palette-at #:set-palette #:set-palette-at
+           #:get-pitch #:get-bitsize #:get-bytesize #:get-masks
            #:get-shifts #:get-losses #:get-blendmode #:get-buffer #:get-view
            #:set-rle #:rle-enabled-p #:must-lock-p #:get-locked))
 ;; Read-time package availability for the native-independent sprite system.

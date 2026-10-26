@@ -135,10 +135,17 @@ Repeated `dispose` is harmless. Accessing a disposed native resource signals
 
 ## Surfaces
 
-`px.surface:make-surface` takes a size and `:alpha` flag. A surface without
-per-pixel alpha is opaque; `:alpha t` starts with transparent pixels. Operations:
+`px.surface:make-surface` takes a size, `:alpha` flag, optional `:depth`
+(8, 12, 15, 16, 24, or 32; default 32), and optional four-channel `:masks`.
+Defaults are an RGB332 palette at depth 8, RGB444/RGB555 at 12/15, RGB565 at
+16, and RGB byte channels at 24/32. `:alpha t` starts with transparent pixels
+and requires depth 16 (RGBA4444) or 32. Custom masks must be nonoverlapping,
+contiguous channels of at most eight bits, fit the depth, agree with `:alpha`,
+and identify a supported SDL format. Invalid combinations fail before allocation.
+SDL can report 15 significant bits for an RGB555 layout requested at depth 16;
+its storage still uses two bytes per pixel. Operations:
 
-- `get-at`, `set-at`, `fill`, `blit`, `blits` read or write pixels. `fill` and
+- `get-at`, `set-at`, `fill`, `blit`, `blits` read or write colors. `fill` and
   `blit` return the affected rectangle. `blit` takes `:area` for a source region.
 - `get-clip`/`set-clip` control destination clipping. `set-at` silently ignores
   out-of-clip positions; `get-at` checks bounds.
@@ -147,10 +154,39 @@ per-pixel alpha is opaque; `:alpha t` starts with transparent pixels. Operations
   copied on input and output, so mutating a channel list or returned Color
   cannot disagree with SDL's stored transparency key.
 - `copy`, `convert`, and `convert-alpha` make independent pixel allocations.
-  A raw copy preserves pixel values, including RGB values underneath zero alpha.
+  `copy` preserves native format, palette and raw indices, including RGB beneath
+  zero alpha. `convert` optionally takes a depth or template Surface, followed
+  by `:masks` (pass NIL for the template to use only keywords). It copies colors
+  into an opaque format. `convert-alpha` creates RGBA32 and bakes color-keyed
+  pixels into zero alpha. Conversion retains blanket alpha.
 - `subsurface` shares a contained rectangular region; `scroll` shifts pixels
   inside the clip; `get-bounding-rect` finds non-keyed pixels above an alpha threshold.
 - `size`, `width`, `height`, `get-rect`, and their `get-*` aliases inspect size.
+
+`get-palette` and `get-palette-at` return independent Colors for an indexed
+surface. `set-palette` replaces a supplied prefix of its palette;
+`set-palette-at` changes one entry. Setters validate all colors before mutation
+and require opaque entries. Subsurfaces inherit independent palettes while
+sharing pixel indices, as in pygame; copies also have independent palettes.
+Palette operations on true-color surfaces signal
+`unsupported-feature`.
+
+`get-at-mapped` and `set-at-mapped` access native integers: palette indices at
+depth 8 and packed channel fields at higher depths. The setter checks bounds
+and respects the drawing clip. `set-colorkey` also accepts a native integer,
+which distinguishes equal-looking palette entries. `get-colorkey` resolves
+the current palette color, so palette edits keep its result accurate. Masks,
+alpha conversion and color-key arrays retain that distinction too.
+
+```lisp
+(px.surface:with-surface (sprite '(16 16) :depth 8)
+  (px.surface:set-palette sprite '((0 0 0) (240 150 60)))
+  (px.surface:set-at-mapped sprite '(8 8) 1)
+  (px.surface:set-colorkey sprite 0)
+  (px.surface:blit screen sprite '(40 40))
+  ;; Recolor every pixel with index 1, without rewriting its stored index.
+  (px.surface:set-palette-at sprite 1 '(80 210 255)))
+```
 
 `set-alpha` and `set-colorkey` accept an optional `:rle` boolean. When supplied,
 it enables or disables SDL's run-length encoding (RLE) blit hint; when omitted,
@@ -436,8 +472,9 @@ string or character (letters are case insensitive):
 | `"r"`, `"g"`, `"b"`, `"a"` | `(width height)` | One byte per selected channel |
 
 Packed element types follow the native pixel storage width. RGB views support
-preserved 24- and 32-bit formats with adjacent RGB/BGR bytes; alpha requires a
-32-bit per-pixel alpha surface. Normal public surface constructors use 32 bits.
+24- and 32-bit formats with adjacent RGB/BGR bytes; alpha requires a
+32-bit per-pixel alpha surface. Packed views support all constructor depths,
+including 24-bit logical values with three-byte strides (a Lisp adaptation).
 Missing channels signal `px:unsupported-feature` without leaving a lock behind.
 
 ```lisp
@@ -456,6 +493,12 @@ should stay inside the child's logical rectangle.
 into specialized CL arrays. The array axes are **X, Y, channel**. `make-surface`
 and `blit-array` copy arrays back; `map-array` maps channels to packed pixels.
 `px.pixelcopy:surface-to-array` fills an existing correctly shaped array.
+Packed copies use octet, 16-bit, or 32-bit Lisp array elements, with 24-bit
+values stored in 32-bit elements. Color/channel copies decode palettes and
+lower-precision channels at any depth. `pixels2d` supports all depths except
+24, matching pygame; `px.pixelarray` and `get-view` kind 2 also support 24-bit
+storage. Live RGB/channel views require actual full byte channels at depth
+24/32; indexed and 16-bit images use copies for decoded colors.
 
 The corresponding `pixels*` functions share storage and lock it:
 
@@ -482,7 +525,7 @@ channel; on opaque surfaces it signals `unsupported-feature`, while the copied
 
 ## PixelArray editing
 
-`px.pixelarray:with-pixel-array` opens a packed 32-bit X/Y view and closes it on
+`px.pixelarray:with-pixel-array` opens a packed native X/Y view and closes it on
 exit. `ref` reads a native packed integer and supports `setf`. `replace`,
 `extract`, and `compare` accept `:distance` in 0–1 and `:weights`, whose first
 three nonnegative values are normalized to a positive sum. The default RGB
@@ -500,8 +543,8 @@ Invalid options are checked before replacement starts.
 `transpose` swaps the X/Y axes without copying pixels. It retains its parent
 view, shares writes, and reports swapped byte strides, including negative
 strides from slices. Close it before the parent view. `make-surface` returns an
-owned image copied from a view, preserving per-pixel alpha capability and
-decoding the actual pixel format. It resets modulation and color-key state.
+owned image copied from a view, preserving its native format, palette, indices
+and per-pixel alpha capability. It resets modulation and color-key state.
 
 ```lisp
 (px.pixelarray:with-pixel-array (pixels image)

@@ -847,6 +847,74 @@
              (list first (multiple-value-list (px.mixer:get-init)))))
       (px.mixer:quit))))
 
+(defun fixture-indexed-palettes-and-subsurfaces ()
+  (px.surface:with-surface (source '(3 2) :depth 8)
+    (px.surface:set-palette source '((0 0 0) (20 30 40) (20 30 40) (80 90 100)))
+    (loop for value in '(0 1 2 3 1 2) for index from 0 do
+      (px.surface:set-at-mapped source (list (mod index 3) (floor index 3)) value))
+    (px.surface:set-colorkey source 2)
+    (px:with-resource (copy (px.surface:copy source))
+      (px:with-resource (child (px.surface:subsurface source '(1 0 2 2)))
+        (px.surface:set-palette-at child 1 '(110 120 130))
+        (px.surface:set-at-mapped child '(0 1) 3)
+        (px.surface:set-palette-at source 2 '(150 160 170))
+        (flet ((packed (surface)
+                 (loop for y below (px.surface:height surface) append
+                   (loop for x below (px.surface:width surface) collect
+                     (px.surface:get-at-mapped surface (list x y)))))
+               (columns (array)
+                 (loop for x below (array-dimension array 0) collect
+                   (loop for y below (array-dimension array 1) collect (aref array x y)))))
+          (list (mapcar (lambda (image) (px.color:to-list (px.surface:get-palette-at image 1)))
+                        (list source child copy))
+                (packed source) (packed child) (packed copy)
+                (mapcar (lambda (image) (px.color:to-list (px.surface:get-colorkey image)))
+                        (list source child copy))
+                (columns (px.surfarray:array-colorkey source))
+                (px.mask:count (px.mask:from-surface source))))))))
+
+(defun fixture-native-pixel-widths ()
+  (loop for depth in '(8 12 15 16 24 32) collect
+    (px.surface:with-surface (surface '(3 2) :depth depth)
+      (if (= depth 8)
+          (progn (px.surface:set-palette-at surface 7 '(213 61 127))
+                 (px.surface:set-at-mapped surface '(2 1) 7))
+          (px.surface:set-at surface '(2 1) '(213 61 127)))
+      (px:with-resource (copy (px.surface:copy surface))
+        (let ((pixels (px.surfarray:array2d surface)))
+          (list (px.surface:get-bitsize surface) (px.surface:get-bytesize surface)
+                (px.surface:get-masks surface) (px.color:to-list (px.surface:get-at surface '(2 1)))
+                (px.surface:get-at-mapped surface '(2 1)) (px.surface:get-bitsize copy)
+                (loop for x below 3 collect (loop for y below 2 collect (aref pixels x y)))))))))
+
+(defun fixture-indexed-nearest-transforms ()
+  (px.surface:with-surface (source '(2 2) :depth 8)
+    (px.surface:set-palette source '((0 0 0) (20 30 40) (20 30 40) (20 30 40) (20 30 40)))
+    (loop for value in '(1 2 3 4) for index from 0 do
+      (px.surface:set-at-mapped source (list (mod index 2) (floor index 2)) value))
+    (px.surface:set-colorkey source 2)
+    (loop for transform in (list (lambda () (px.transform:flip source t nil))
+                                (lambda () (px.transform:scale source '(4 2)))
+                                (lambda () (px.transform:scale2x source))
+                                (lambda () (px.transform:rotate source 90))
+                                (lambda () (px.transform:chop source '(0 0 1 1)))) collect
+      (px:with-resource (output (funcall transform))
+        (let ((pixels (px.surfarray:array2d output)))
+          (list (px.surface:get-bitsize output) (px.surface:size output)
+                (loop for x below (array-dimension pixels 0) collect
+                  (loop for y below (array-dimension pixels 1) collect (aref pixels x y)))))))))
+
+(defun fixture-indexed-image-decoding ()
+  (px.surface:with-surface (source '(3 1) :depth 8)
+    (px.surface:set-palette source '((0 0 0) (13 27 41) (13 27 41)))
+    (loop for x below 3 for value in '(2 1 0) do (px.surface:set-at-mapped source (list x 0) value))
+    (px:with-resource (decoded (px.image:load-bytes (px.image:save-bytes source :namehint :bmp)
+                                                   :preserve-format t))
+      (let ((pixels (px.surfarray:array2d decoded)))
+        (list (px.surface:get-bitsize decoded)
+              (loop for index below 3 collect (px.color:to-list (px.surface:get-palette-at decoded index)))
+              (loop for x below 3 collect (list (aref pixels x 0))))))))
+
 (defun fixture-data ()
   (px.surface:with-surface (source '(2 2) :alpha t)
     (loop for pixel in '((10 2 3 127) (20 5 6 128) (30 8 9 255) (40 11 12 0))
@@ -923,7 +991,9 @@
              (fixture-freetype-retained-text)
              (fixture-sprite-image-crops) (fixture-render-updates-damage)
              (fixture-float32-sound-arrays) (fixture-native-display-mode-queries)
-             (fixture-encoded-font-input) (fixture-mixer-output-selection-and-defaults))))))))
+             (fixture-encoded-font-input) (fixture-mixer-output-selection-and-defaults)
+             (fixture-indexed-palettes-and-subsurfaces) (fixture-native-pixel-widths)
+             (fixture-indexed-nearest-transforms) (fixture-indexed-image-decoding))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

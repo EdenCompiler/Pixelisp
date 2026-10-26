@@ -58,6 +58,15 @@ include `rotozoom`, `scale2x`, `chop`, `grayscale`, `average-color`,
 `average-surfaces`, and `threshold`. Surface alpha metadata and color keys are
 preserved by transforms where applicable.
 
+Nearest-neighbor operations (`flip`, `scale`, `scale2x`, `chop`, and `rotate`)
+preserve native format and raw palette indices, even when multiple entries
+have the same color. Their new palettes are independent copies. Supplied
+scale/scale2x destinations must have matching depth and channel masks; raw
+transform writes ignore destination clips. `smoothscale` requires 24/32-bit
+input. `rotozoom` accepts all supported depths and returns RGBA32, using
+decoded colors and color-key transparency. Filtered pixels can differ from
+pygame's optimized implementation.
+
 `laplacian` finds edges with a 3×3 kernel: eight times each center channel
 minus its eight neighbors, clamped to octets. Missing neighbors are opaque
 white. It returns a new surface, or accepts an optional destination of the
