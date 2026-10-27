@@ -11,6 +11,9 @@
    (reader :initarg :reader :reader view-reader)
    (writer :initarg :writer :reader view-writer)
    (releaser :initarg :releaser :reader view-releaser)
+   ;; Private provenance used by PixelArray validation. Public MAKE-VIEW never
+   ;; accepts this flag; only packed surface factories and their derivatives do.
+   (packed-view-p :initform nil :accessor %packed-view-p)
    (dependents :initform 0 :accessor dependent-count)))
 (defun dimensions (view)
   "Return a copy of the shape, so callers cannot alter the bounds checks."
@@ -41,6 +44,11 @@
     ;; Validate and construct first: failed construction must not pin its owner.
     (when (typep owner 'buffer-view) (incf (dependent-count owner)))
     (pixelisp.internal:register-resource view)))
+(defun %make-packed-view (&rest arguments)
+  "Construct a trusted native packed-pixel view for PixelArray operations."
+  (let ((view (apply #'make-view arguments)))
+    (setf (%packed-view-p view) t)
+    view))
 (defmethod pixelisp.internal:ensure-live :before ((view buffer-view))
   (when (typep (owner view) 'pixelisp.internal:resource)
     (pixelisp.internal:ensure-live (owner view))))
@@ -88,11 +96,12 @@
                                                (< (+ start (* (1- size) step)) dim))))
                (error "Slice outside its parent.")))
     (flet ((translate (indices) (mapcar (lambda (a b c) (+ a (* b c))) starts indices steps)))
-      (make-view :owner view :dimensions sizes :element-type (element-type view)
-                 :strides (when (strides view) (mapcar #'* (strides view) steps))
-                 :byte-offset (+ (byte-offset view)
-                                 (if (%strides view) (reduce #'+ (mapcar #'* starts (%strides view))) 0))
-                 :reader (lambda (&rest indices) (apply #'view-ref view (translate indices)))
-                 :writer (when (view-writer view)
-                           (lambda (value &rest indices)
-                             (setf (apply #'view-ref view (translate indices)) value)))))))
+      (funcall (if (%packed-view-p view) #'%make-packed-view #'make-view)
+               :owner view :dimensions sizes :element-type (element-type view)
+               :strides (when (strides view) (mapcar #'* (strides view) steps))
+               :byte-offset (+ (byte-offset view)
+                               (if (%strides view) (reduce #'+ (mapcar #'* starts (%strides view))) 0))
+               :reader (lambda (&rest indices) (apply #'view-ref view (translate indices)))
+               :writer (when (view-writer view)
+                         (lambda (value &rest indices)
+                           (setf (apply #'view-ref view (translate indices)) value)))))))

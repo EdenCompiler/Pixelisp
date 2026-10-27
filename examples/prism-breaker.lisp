@@ -178,17 +178,38 @@
         :launched (not (null (getf state :launched)))
         :launches (getf state :launches) :combo (getf state :combo)))
 
+(defun %breaker-brick-image (color)
+  "Shade a prism in its scoring row's color, then cache it for native blits."
+  (let ((image (px.surface:make-surface '(68 24) :alpha t))
+        ;; Pixel arrays use X/Y order. One column of colors will broadcast
+        ;; across every column of the brick, keeping the gradient code small.
+        (rows (make-array '(1 24)))
+        (complete nil))
+    (unwind-protect
+         (progn
+           (dotimes (y 24)
+             (setf (aref rows 0 y)
+                   (cond ((< y 3) '(255 255 255 120))
+                         ((>= y 20) '(30 39 64 100))
+                         (t (append (mapcar (lambda (channel)
+                                              (round (* channel (- 1 (/ y 92)))))
+                                            color)
+                                    '(255))))))
+           ;; ASSIGN validates and maps all colors before touching the image.
+           ;; Closing the view releases its surface lock before gameplay draws.
+           (px.pixelarray:with-pixel-array (pixels image)
+             (px.pixelarray:assign pixels rows))
+           (setf complete t)
+           image)
+      (unless complete (px:dispose image)))))
+
 (defun make-prism-breaker (session)
   "Build the Prism Breaker callback bundle and cache all reusable art once."
   (let* ((screen (session-screen session))
          (background (px.surface:make-surface '(900 620)))
          (brick-images (loop for color in '((255 88 122) (255 151 83) (255 211 91)
                                            (104 225 186) (83 196 255) (177 139 255))
-                             collect (let ((image (px.surface:make-surface '(68 24) :alpha t)))
-                                       (px.surface:fill image color)
-                                       (px.draw:rect image '(255 255 255 120) '(0 0 68 3))
-                                       (px.draw:rect image '(30 39 64 100) '(0 20 68 4))
-                                       image)))
+                             collect (%breaker-brick-image color)))
          (paddle (px.surface:make-surface '(104 16) :alpha t))
          (ball (px.surface:make-surface '(16 16) :alpha t)))
     (px.surface:fill background '(10 17 33))

@@ -51,7 +51,7 @@
                   (and rgb (/= component-stride (- (third offsets) (second offsets)))))
           (error 'pixelisp:unsupported-feature :operation 'pixels
                  :message "This surface has no shared byte channel for the requested view."))
-        (px.buffer:make-view
+        (funcall (if packed #'px.buffer::%make-packed-view #'px.buffer:make-view)
          :owner surface :dimensions (if rgb (list width height 3) (list width height))
          :strides (if rgb (list bytes pitch component-stride) (list bytes pitch))
          :byte-offset (if packed 0 (first offsets))
@@ -193,7 +193,6 @@
   ;; PixelArray supports 24-bit pixels through a native three-byte stride.
   (px.surface:get-view surface #\2))
 (setf (fdefinition 'ref) #'px.buffer:view-ref
-      (fdefinition '(setf ref)) (fdefinition '(setf px.buffer:view-ref))
       (fdefinition 'close) #'px.buffer:close
       (fdefinition 'slice) #'px.buffer:slice)
 (defmacro with-pixel-array ((name surface) &body body)
@@ -216,7 +215,9 @@
          (base pixels))
     (loop while (typep (px.buffer:owner base) 'px.buffer:buffer-view)
           do (setf base (px.buffer:owner base)))
-    (unless (and (= (length (px.buffer:dimensions pixels)) 2)
+    (unless (and (px.buffer::%packed-view-p pixels)
+                 (px.buffer::%packed-view-p base)
+                 (= (length (px.buffer:dimensions pixels)) 2)
                  (= (length (px.buffer:dimensions base)) 2)
                  (equal (px.buffer:owner base) surface)
                  (equal (px.buffer:dimensions base)
@@ -336,7 +337,7 @@ uses weighted RGB distance and ignores alpha. Surface layouts may differ."
   (%validate-pixel-array pixels)
   (let ((dimensions (px.buffer:dimensions pixels))
         (strides (px.buffer:strides pixels)))
-    (px.buffer:make-view
+    (px.buffer::%make-packed-view
      :owner pixels :dimensions (reverse dimensions) :strides (reverse strides)
      :byte-offset (px.buffer:byte-offset pixels)
      :element-type (px.buffer:element-type pixels)

@@ -18,7 +18,9 @@ updates only while active, and draws a common pause or end-state overlay.
 | **Echo Grove** | Watch and listen to a four-pad sequence, then repeat it with keys 1–4, the arrow keys, or mouse clicks. Reach six rounds before losing three mistake lives. | The sequence grows one note at a time. Each pad has an always-visible color cue and an optional generated tone, so the game remains playable with audio disabled. |
 
 The games demonstrate library features through their mechanics: Prism Breaker
-uses rectangles, vectors, native surface blits, and generated sound; Orbit
+uses rectangles, vectors, native surface blits, and generated sound. Its shaded
+prisms keep each scoring row recognizable: a one-column color array broadcasts
+across a PixelArray during asset creation, and that view closes before play. Orbit
 Patrol uses cached rotations with RLE source blits, vectors, and pixel-mask collisions; Crater Command
 joins rendered terrain to a mutable mask; Echo Grove combines event input,
 cached text, pad sprites sampling dim/lit frames from a shared image atlas,

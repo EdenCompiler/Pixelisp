@@ -17,7 +17,8 @@
   :components ((:file "src/surface") (:file "src/runtime") (:file "src/mouse-events")
                (:file "src/display-modes")
                (:file "src/graphics") (:file "src/mask-surface")
-               (:file "src/arrays") (:file "src/surface-views") (:file "src/media")
+               (:file "src/arrays") (:file "src/pixelarray-assignment")
+               (:file "src/surface-views") (:file "src/media")
                (:file "src/font-memory") (:file "src/sndarray")
                (:file "src/devices") (:file "src/device-info") (:file "src/threads") (:file "src/sdl2-ext")
                (:file "src/image-output")
@@ -32,7 +33,7 @@
 (asdf:defsystem "pixelisp/freetype"
   :depends-on ("pixelisp" "cl-freetype2")
   :serial t
-  :components ((:file "src/freetype") (:file "src/freetype-info")))
+  :components ((:file "src/freetype") (:file "src/freetype-info") (:file "src/freetype-memory")))
 (asdf:defsystem "pixelisp/midi"
   :depends-on ("pixelisp") :components ((:file "src/midi")))
 (asdf:defsystem "pixelisp/camera"
@@ -60,7 +61,8 @@
                (:file "tests/colors") (:file "tests/color-parsing") (:file "tests/color-arithmetic")
                (:file "tests/math-extra") (:file "tests/vector-api") (:file "tests/vector-access") (:file "tests/value-updates")
                (:file "tests/arrays") (:file "tests/surface-views")
-               (:file "tests/pixelarray-extra") (:file "tests/surface-batch")
+               (:file "tests/pixelarray-extra") (:file "tests/pixelarray-assignment")
+               (:file "tests/surface-batch")
                (:file "tests/surface-effects") (:file "tests/surface-info") (:file "tests/surface-rle")
                (:file "tests/surface-formats") (:file "tests/format-arrays")
                (:file "tests/format-transforms")
@@ -75,6 +77,7 @@
                (:file "tests/media") (:file "tests/freetype-arrays")
                (:file "tests/freetype-styles") (:file "tests/freetype-info") (:file "tests/freetype-layout")
                (:file "tests/freetype-size") (:file "tests/freetype-reuse")
+               (:file "tests/freetype-memory")
                (:static-file "tests/fixtures/tiny-mono.bdf")
                (:file "tests/image-memory") (:file "tests/image-export") (:file "tests/font-script")
                (:file "tests/font-memory") (:file "tests/mixer-init")

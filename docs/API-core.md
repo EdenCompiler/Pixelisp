@@ -526,7 +526,36 @@ channel; on opaque surfaces it signals `unsupported-feature`, while the copied
 ## PixelArray editing
 
 `px.pixelarray:with-pixel-array` opens a packed native X/Y view and closes it on
-exit. `ref` reads a native packed integer and supports `setf`. `replace`,
+exit. `ref` reads a native packed integer; its `setf` writer accepts packed
+integers, Colors, RGB(A) lists/vectors, and color names or hexadecimal strings.
+Signed 32-bit integers are interpreted as their packed two's-complement bits.
+
+`assign` fills a whole view or a slice and returns that view. Its source can be
+one color, a rank-two Lisp array of colors/packed integers, or another
+PixelArray. Array dimensions use X/Y order. Each source dimension must match
+the destination or be 1, which broadcasts that column or row. For example,
+`#2A(("red" "gold" "navy"))` repeats one three-pixel column across the width
+of a three-pixel-high destination. RGB(A) lists and vectors always mean one
+color; use a rank-two array for a collection of pixels.
+
+Assignments snapshot and validate the result before writing, so overlapping
+slices, reversals, and transposes can safely read their own destination.
+PixelArray sources with matching native depth and masks copy packed values
+exactly, including indices across different palettes. Differing layouts copy
+decoded colors through the destination format. This extends pygame 2.6.1's
+format remapping, which is limited to three-byte PixelArrays. Views retain
+their surface lock until closed; assignment does not close either argument.
+
+```lisp
+(px.pixelarray:with-pixel-array (pixels image)
+  (px.pixelarray:assign pixels '(20 30 50))
+  (setf (px.pixelarray:ref pixels 0 0) "gold")
+  (px.buffer:with-view
+      (stripe (px.pixelarray:slice pixels '(0 0) '(1 3)))
+    (px.pixelarray:assign stripe #2A(("red" "gold" "navy")))))
+```
+
+`replace`,
 `extract`, and `compare` accept `:distance` in 0–1 and `:weights`, whose first
 three nonnegative values are normalized to a positive sum. The default RGB
 weights are `(0.299 0.587 0.114)`.

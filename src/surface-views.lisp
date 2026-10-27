@@ -64,7 +64,9 @@
          (contiguous-p (= pitch (* width bytes)))
          (count (* width height)))
     (labels ((make-locked-view (&rest arguments)
-               (apply #'px.buffer:make-view
+               (apply (if (char= kind #\2)
+                          #'px.buffer::%make-packed-view
+                          #'px.buffer:make-view)
                       :owner surface :releaser (lambda () (unlock surface)) arguments))
              (pixel-type () (list 'unsigned-byte (* 8 bytes)))
              (pixel (x y) (%view-read-pixel surface x y))

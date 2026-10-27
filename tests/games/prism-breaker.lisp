@@ -1,6 +1,20 @@
 (in-package #:pixelisp.examples.tests)
 (in-suite examples)
 
+(test prism-breaker-shading-broadcasts-scoring-colors-and-releases-the-view
+  (px:with-init (:video nil)
+    (px:with-resource (brick (px.examples::%breaker-brick-image '(255 88 122)))
+      (is (equal '(68 24) (px.surface:size brick)))
+      ;; The whole row shares a color, while its lower rows darken. The prism
+      ;; keeps the same color cue that tells players which row they cleared.
+      (is (equalp (px.surface:get-at brick '(0 10))
+                  (px.surface:get-at brick '(67 10))))
+      (is (> (px:color-r (px.surface:get-at brick '(32 5)))
+             (px:color-r (px.surface:get-at brick '(32 18)))))
+      (is (= 255 (px:color-a (px.surface:get-at brick '(32 10)))))
+      (is (not (px.surface:locked-p brick)))))
+  (is (%clean-run-p)))
+
 (test prism-breaker-brick-impact-scores-and-clears-objective
   (let ((state (px.examples::%breaker-new-state)))
     ;; Put the ball just below an isolated brick and drive it upward through it.

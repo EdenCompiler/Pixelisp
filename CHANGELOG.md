@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Load direct FreeType and ftfont fonts from encoded octets and binary streams;
+  select collection faces and inspect their source path, index and face count.
+  Retain native source storage through face disposal and failed setup cleanup.
+- Add PixelArray color setters and bulk assignment from colors, Lisp arrays and
+  packed views, with singleton broadcasting, overlap snapshots and native
+  format remapping. Prism Breaker uses broadcast shading for its scoring rows.
 - Add indexed and lower-depth surfaces, validated channel masks, editable
   palettes, mapped pixel writes and depth/template conversion. Subsurfaces
   share pixel indices with independent palettes; copies retain raw indices.

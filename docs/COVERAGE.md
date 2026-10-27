@@ -32,14 +32,14 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
 | `sprite` | `px.sprite` | CLOS sprites, source-image crops, single/ordered/RenderUpdates/layered/dirty groups, membership/update, old/new damage tracking and retry preservation, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
 | `font`, `sysfont` | `px.font`, `px.sysfont` | Fonts loaded from paths, encoded octets or binary streams with retained native storage; UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
-| `freetype`, `_freetype` | `px.freetype` | Direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
+| `freetype`, `_freetype` | `px.freetype` | Path/octet/stream fonts, collection face selection and source metadata, direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Output-device selection and allowed-setting negotiation; sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
 | `sndarray` | `px.sndarray` | Integer PCM and float32 copied sample arrays/live views, sound creation from arrays |
 | `surfarray` | `px.surfarray` | Packed/RGB/channel copies across native depths, packed views except 24-bit, full byte-channel views at 24/32-bit, array-to-surface operations |
 | `pixelcopy` | `px.pixelcopy` | Copy into existing arrays and map pixel formats |
-| `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
+| `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, color setters, scalar fills, broadcast assignment with overlap snapshots, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
 | `BufferProxy`, `bufferproxy`, `newbuffer` | `px.buffer`, `px.bufferproxy` | Owner-backed views, bounds/lifetime checks, explicit release and slicing |
 | `camera`, camera backends | `px.camera` | Linux V4L2 enumeration/capture, negotiated resolution, queried controls, RGB/HSV/YUV conversions |
 | `scrap` | `px.scrap` | UTF-8 clipboard and primary selection; advertises text-only capabilities |
@@ -67,6 +67,10 @@ The exported Lisp symbols and module API guides describe the actual interface.
   alpha channel, and byte offsets/strides reflect imported channel layouts.
   PixelArray comparisons decode colors across different native layouts; copied
   selection/comparison masks use bits rather than new PixelArray wrappers.
+  Bulk assignment uses `assign` instead of Python slice syntax and accepts
+  rank-two Lisp arrays. Matching native layouts copy packed values; different
+  layouts remap colors at every depth, extending pygame's 24-bit-only remapping.
+  PixelArrays remain rank two, including singleton rows and columns.
 - Surface constructors retain Pixelisp's existing RGB byte order at 24/32-bit;
   custom masks select other SDL layouts. RGB565 and indexed RGB332 defaults
   match conventional SDL formats. Palettes are opaque RGB; use a color key
@@ -151,9 +155,12 @@ The exported Lisp symbols and module API guides describe the actual interface.
   large Lisp streams are materialized before native playback. TGA output uses
   uncompressed raw BGR/BGRA pixels; pygame can use RLE and encode transparency
   differently. PNG/JPEG/BMP memory encoding uses the optional native bridge.
-- Font byte inputs retain a private native copy and SDL stream until font
-  disposal. Caller streams remain open and may be closed immediately after
-  construction. Direct FreeType/ftfont constructors still accept paths only.
+- Font byte inputs retain a private native copy until font disposal; SDL_ttf
+  also retains its SDL stream. Caller streams remain open and may be closed
+  immediately after construction. Direct FreeType and ftfont accept the same
+  source forms and select collection faces with `:font-index`.
+  Pixelisp materializes FreeType streams up front; pygame can read its borrowed
+  file object again during later rendering, so stream-close behavior differs.
   Mixer change flags accept Lisp keyword lists or SDL bitmasks; `:device-name`
   corresponds to pygame's `devicename`. Wheel fields use hyphenated keywords,
   and window references are integer SDL IDs rather than pygame window objects.
@@ -194,6 +201,13 @@ Native-format tests cover padded rows, palettes and duplicate keyed indices,
 shared subsurface pixels with independent palettes, copies, conversions, decoded image
 format preservation, strided live arrays and native-width transform pixels.
 Echo Grove tests verify palette changes follow its remaining mistake lives.
+PixelArray assignment tests cover color forms, singleton broadcasting, native
+format remapping, palette indices, overlapping reversed/transposed views,
+closed views and validation before mutation. Prism Breaker shades its scoring
+rows by broadcasting a column of colors, then releases the view before drawing.
+Direct FreeType source tests also exercise generated two-face TTC data,
+face selection, malformed input, source metadata and disposal after native
+configuration failures.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
 The retained-text fixture compares immediate reuse. The local pygame build's

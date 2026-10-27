@@ -10,6 +10,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import subprocess
+import struct
 import wave
 
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
@@ -51,7 +52,82 @@ CASE_NAMES = [
     "encoded font input", "mixer output selection and defaults",
     "indexed palettes and subsurfaces", "native pixel widths",
     "indexed nearest transforms", "indexed image decoding",
+    "PixelArray color assignment and broadcasting", "PixelArray native copy formats",
+    "FreeType memory sources and collections",
 ]
+
+
+def pixelarray_assignment_and_broadcasting():
+    masks = (0xff, 0xff00, 0xff0000, 0xff000000)
+    target = pygame.Surface((4, 3), pygame.SRCALPHA, 32, masks)
+    column = pygame.Surface((1, 3), pygame.SRCALPHA, 32, masks)
+    row = pygame.Surface((4, 1), pygame.SRCALPHA, 32, masks)
+    with pygame.PixelArray(target) as pixels:
+        pixels[:] = (10, 20, 30, 40)
+        pixels[1, 1] = pygame.Color(60, 70, 80, 90)
+        result = [list(target.get_at((0, 0))), list(target.get_at((1, 1)))]
+        with pygame.PixelArray(column) as source:
+            for y in range(3):
+                source[0, y] = (10 + y * 10, 2, 3, 255)
+            pixels[:] = source
+            result.append(red_values(target))
+        with pygame.PixelArray(row) as source:
+            for x in range(4):
+                source[x, 0] = (40 + x * 10, 2, 3, 255)
+            pixels[:] = source
+            result.append(red_values(target))
+        pixels[:] = pixels[::-1, :]
+        result.append(red_values(target))
+    return result
+
+
+def pixelarray_native_copy_formats():
+    source = pygame.Surface((2, 1), 0, 24, (0xff0000, 0xff00, 0xff, 0))
+    target = pygame.Surface((2, 1), 0, 24, (0xff, 0xff00, 0xff0000, 0))
+    with pygame.PixelArray(source) as source_pixels:
+        source_pixels[0, 0], source_pixels[1, 0] = (10, 20, 30), (40, 50, 60)
+        with pygame.PixelArray(target) as target_pixels:
+            target_pixels[:] = source_pixels
+    result = [[list(target.get_at((x, 0))) for x in range(2)]]
+    source, target = pygame.Surface((2, 1), 0, 8), pygame.Surface((2, 1), 0, 8)
+    source.set_palette_at(9, (255, 0, 0))
+    target.set_palette_at(9, (0, 0, 255))
+    with pygame.PixelArray(source) as source_pixels:
+        source_pixels[:] = 9
+        with pygame.PixelArray(target) as target_pixels:
+            target_pixels[:] = source_pixels
+            result.append([int(target_pixels[x, 0]) for x in range(2)])
+    result.append(list(target.get_at((0, 0))))
+    return result
+
+
+def freetype_memory_sources_and_collections():
+    import pygame.freetype as ft
+    ft.init()
+    path = ROOT / "assets/fonts/DejaVuSans.ttf"
+    original = path.read_bytes()
+    expected = ft.Font(str(path), 18).render_raw("Memory face")
+    memory = ft.Font(BytesIO(original), 18)
+    stream = BytesIO(original)
+    streamed = ft.Font(stream, 18)
+    stream_matches = int(streamed.render_raw("Memory face") == expected)
+    stream.close()
+    # Two collection entries share the bundled font's directory and tables.
+    # Table offsets are absolute within a TTC, so shift each by its header.
+    shifted = bytearray(original)
+    for index in range(struct.unpack_from(">H", shifted, 4)[0]):
+        field = 12 + index * 16 + 8
+        struct.pack_into(">I", shifted, field, struct.unpack_from(">I", shifted, field)[0] + 20)
+    collection = b"ttcf" + struct.pack(">IIII", 0x10000, 2, 20, 20) + shifted
+    selected = ft.Font(BytesIO(collection), 18, font_index=1)
+    try:
+        ft.Font(BytesIO(collection), 18, font_index=2)
+        rejected = 0
+    except (OSError, ValueError):
+        rejected = 1
+    return [int(memory.render_raw("Memory face") == expected),
+            stream_matches,
+            int(selected.render_raw("Memory face") == expected), rejected]
 
 
 def indexed_palettes_and_subsurfaces():
@@ -1171,6 +1247,8 @@ def reference():
         encoded_font_input(), mixer_output_selection_and_defaults(),
         indexed_palettes_and_subsurfaces(), native_pixel_widths(),
         indexed_nearest_transforms(), indexed_image_decoding(),
+        pixelarray_assignment_and_broadcasting(), pixelarray_native_copy_formats(),
+        freetype_memory_sources_and_collections(),
     ]
 
 

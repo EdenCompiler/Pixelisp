@@ -10,7 +10,8 @@
            #:get-metrics #:get-kerning #:get-rect #:render #:render-to #:render-raw
            #:size #:kerning #:antialiased #:origin #:style #:underline #:oblique #:strong #:wide
            #:strength #:underline-adjustment #:get-sized-height #:get-sized-ascender
-           #:get-sized-descender #:name #:render-raw-to #:rotation #:vertical #:use-bitmap-strikes))
+           #:get-sized-descender #:name #:render-raw-to #:rotation #:vertical #:use-bitmap-strikes
+           #:load-font-bytes #:path #:font-index #:num-faces))
 (in-package #:pixelisp.freetype)
 (defconstant style-normal 0)
 (defconstant style-underline 4)
@@ -33,7 +34,11 @@
    (style :initarg :style :initform style-normal :reader %style)
    (strength :initarg :strength :initform (/ 1.0 36) :reader %strength)
    (underline-adjustment :initarg :underline-adjustment :initform 1.0 :reader %underline-adjustment)
-   (path :initarg :path :reader %path)))
+   (path :initarg :path :reader %path)
+   (font-index :initarg :font-index :initform 0 :reader %font-index)
+   ;; FT_New_Memory_Face borrows encoded data for the face's whole lifetime.
+   ;; This allocation belongs to the font and is released after FT_Done_Face.
+   (memory :initarg :memory :initform nil :accessor %memory)))
 (defun init () (setf *initialized* t))
 (defun quit ()
   (dolist (resource pixelisp.internal:*resources*)
@@ -129,32 +134,14 @@
     (setf (slot-value font 'size) normalized)
     ;; SETF returns its new value; do not let that expose the stored pair.
     (%copy-size normalized)))
-(defun make-font (&optional filename (size 16) &key (kerning t) (antialiased t))
-  "Open a directly rendered FreeType face at SIZE pixels (or (width height))."
-  (let ((size (%normalize-size size)))
-    (init)
-    (let* ((path (or filename (get-default-font)))
-           (face (freetype2:new-face path))
-           (complete nil) (finalizer-cancelled nil))
-      (unwind-protect
-           (progn
-             ;; Keep the dependency's finalizer until native face setup succeeds.
-             (%set-face-size face size)
-             (trivial-garbage:cancel-finalization face)
-             (setf finalizer-cancelled t)
-             (let ((resource (pixelisp.internal:register-resource
-                              (make-instance 'font :handle face :path path
-                                             :size size :kerning kerning :antialiased antialiased))))
-               (setf complete t)
-               resource))
-        (when (and (not complete) finalizer-cancelled)
-          ;; We cancelled FreeType's finalizer immediately before registration.
-          (when (not (cffi:null-pointer-p (freetype2-types:fw-ptr face)))
-            (freetype2-ffi:ft-done-face (freetype2-types:w* face))
-            (freetype2-types:libc-free (freetype2-types:fw-ptr face))
-            (setf (freetype2-types:fw-ptr face) (cffi:null-pointer))))))))
-(defun font (&optional filename (size 16) &key (kerning t) (antialiased t))
-  (make-font filename size :kerning kerning :antialiased antialiased))
+(defun make-font (&optional source (size 16) &key (kerning t) (antialiased t) (font-index 0))
+  "Open a path, encoded octets, or binary stream at SIZE pixels.
+
+NIL selects the bundled font. FONT-INDEX selects a face in a font collection.
+Memory sources are copied and retained until the font is closed."
+  (%make-font-from-source source (%normalize-size size) font-index kerning antialiased))
+(defun font (&optional source (size 16) &key (kerning t) (antialiased t) (font-index 0))
+  (make-font source size :kerning kerning :antialiased antialiased :font-index font-index))
 (defun sys-font (name size &key bold italic)
   (make-font (or (match-font name :bold bold :italic italic) (get-default-font)) size))
 (setf (fdefinition 'sysfont) #'sys-font)
@@ -241,10 +228,11 @@
   (check-type value (real -2.0 2.0))
   (setf (slot-value font 'underline-adjustment) value))
 (defmethod pixelisp.internal:dispose ((font font))
-  (let* ((face (pixelisp.internal:handle font)) (storage (freetype2-types:fw-ptr face)))
-    (freetype2-ffi:ft-done-face (freetype2-types:w* face))
-    (freetype2-types:libc-free storage)
-    (setf (freetype2-types:fw-ptr face) (cffi:null-pointer))))
+  (unwind-protect
+       (%release-face (pixelisp.internal:handle font))
+    (when (%memory font)
+      (%release-font-memory (%memory font))
+      (setf (%memory font) nil))))
 (defun close (font) (pixelisp.internal:dispose font))
 (defun name (font) (freetype2-types:ft-face-family-name (%face font)))
 (defun get-sized-height (font &optional size)

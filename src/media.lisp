@@ -1118,10 +1118,11 @@ Events are created by UPDATE on the Lisp thread, never by SDL's audio thread."
       (error 'pixelisp:dependency-error :operation name
              :message "Load the pixelisp/freetype ASDF system to use FTFont"))
     (apply function arguments)))
-(defun make-font (&optional filename (point-size 16))
+(defun make-font (&optional source (point-size 16) &key (font-index 0))
   "SDL_ttf-style constructor backed by the optional direct FreeType renderer."
-  (%freetype-call :make-font filename point-size))
-(defun font (&optional filename (point-size 16)) (make-font filename point-size))
+  (%freetype-call :make-font source point-size :font-index font-index))
+(defun font (&optional source (point-size 16) &key (font-index 0))
+  (make-font source point-size :font-index font-index))
 (defun sys-font (name point-size &key bold italic)
   (%freetype-call :sys-font name point-size :bold bold :italic italic))
 (setf (fdefinition 'sysfont) #'sys-font)

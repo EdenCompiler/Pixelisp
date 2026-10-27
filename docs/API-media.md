@@ -128,7 +128,7 @@ format, and channel count as three values.
 `:allowed-changes` controls how SDL may adapt the requested settings. Pass a
 list of `:frequency`, `:format`, `:channels`, and/or `:samples`, or their SDL
 integer bitmask (1, 2, 4, and 8 respectively). The default is frequency and
-channel changes (5). NIL or 0 requests the specified format; SDL can still
+channel changes (5). Zero requests the specified format; SDL can still
 convert internally to a hardware format. Actual availability depends on the
 audio backend. Buffer sizes round up to a power of two, with a 256-frame minimum.
 
@@ -258,6 +258,27 @@ Load `pixelisp/freetype` for `px.freetype`. `render` returns a surface and a
 baseline-relative bounds Rect; `render-raw` returns a packed grayscale mask and
 its `(width height)`. The packed vector is row-major (`x + y * width`). Pass
 `:invert t` to `render-raw` to return `255 - coverage` for every mask pixel.
+
+`make-font` and `font` accept a pathname, namestring, encoded octet vector,
+binary input stream, or NIL for the bundled font. Streams are read from their
+current position through EOF and remain open. Memory fonts retain a private
+native copy, so the caller can change its vector or close its stream after
+construction. `load-font-bytes` is the explicit octet-vector constructor.
+The `px.ftfont:make-font` and `font` facade constructors accept these sources
+too. No temporary font files are needed.
+
+Pass `:font-index` to select a nonnegative face index in a collection such as
+TTC. Out-of-range indices and malformed font sources signal `px:error`;
+invalid argument types signal type errors. `font-index` reports the requested
+index, `num-faces` reports the collection's face count, and `path` returns a
+fresh namestring or NIL for memory inputs. These readers check the font's
+lifetime. Size remains in pixels, as described below.
+
+```lisp
+(with-open-file (asset #p"assets/interface.ttc" :element-type '(unsigned-byte 8))
+  (px:with-resource (font (px.freetype:make-font asset 24 :font-index 1))
+    (px.freetype:render-to font screen '(40 80) "Next round" '(255 220 140))))
+```
 
 `style` is a settable bitmask: combine `style-strong` (1), `style-oblique` (2),
 `style-underline` (4), and `style-wide` (8) with `logior`. `style-normal` (0)
@@ -413,6 +434,7 @@ cache remains unimplemented.
 
 Close a surface view when finished; its view locks the surface until closed.
 Each font owns a FreeType face and follows the same explicit disposal rules as
-SDL_ttf fonts.
+SDL_ttf fonts. Memory-backed faces close before their encoded storage is
+released, including failed size setup and resource registration.
 
 All sample and image operations in this guide work with SDL's dummy video/audio drivers, so applications can exercise decoding and data manipulation in headless environments. Real playback and window presentation require the corresponding system devices.
