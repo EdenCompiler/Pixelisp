@@ -42,7 +42,7 @@
   "Return the ascent-to-descent span in pixels, including one baseline row.
 
 Like pygame, this uses face metrics; it does not measure a particular string
-or include synthetic styles. SIZE temporarily selects the native pixel size
+or include synthetic styles. SIZE temporarily selects the point size at FONT's DPI
 and leaves the font's default SIZE property unchanged."
   (let* ((face (%face font size))
          (metrics (freetype2-types:ft-size-metrics

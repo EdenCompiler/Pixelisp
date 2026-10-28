@@ -146,16 +146,54 @@
             (%breaker-miss-ball state))))))
   state)
 
-(defun %breaker-event (state event session)
+(defun %breaker-open-controller ()
+  "Open the first mapped gamepad; mouse and keyboard remain available."
+  ;; FROM-JOYSTICK acquires its own native reference. Closing the temporary
+  ;; joystick here leaves the controller alive until the game's scoped cleanup.
+  (handler-case
+      (loop for index below (px.controller:get-count)
+            when (px.controller:controller-p index)
+              return (px.joystick:with-joystick (joystick index)
+                       (px.controller:from-joystick joystick)))
+    ;; A device can disappear between enumeration and opening it.
+    (px:error () nil)))
+
+(defun %breaker-controller-event (controller event)
+  "Keep the selected gamepad across frames and replace it after hotplugging."
+  (case (px.event:type event)
+    (:controller-device-added (or controller (%breaker-open-controller)))
+    (:controller-device-removed
+     (if (and controller (= (px.controller:instance-id controller)
+                             (px.event:attribute event :which -1)))
+         (progn (px:dispose controller) (%breaker-open-controller))
+         controller))
+    (otherwise controller)))
+
+(defun %breaker-stick (value)
+  "Remove small resting-stick drift and rescale the remaining travel to [-1,1]."
+  (let ((dead-zone 0.18d0))
+    (if (<= (abs value) dead-zone) 0d0
+        (* (signum value) (/ (- (abs value) dead-zone) (- 1 dead-zone))))))
+
+(defun %breaker-event (state event session &optional controller)
   (declare (ignore session))
-  (when (and (eq (px.event:type event) :key-down)
-             (eq (px.event:attribute event :key) :space))
+  (when (or (and (eq (px.event:type event) :key-down)
+                 (eq (px.event:attribute event :key) :space))
+            (and controller (eq (px.event:type event) :controller-button-down)
+                 (= (px.controller:instance-id controller)
+                    (px.event:attribute event :which -1))
+                 (member (px.event:attribute event :button) '(0 :a))))
     (%breaker-launch state))
   state)
 
-(defun %breaker-step (state seconds session)
+(defun %breaker-step (state seconds session &optional controller)
   (let* ((mouse (session-mouse-pos session))
-         (left (%held-p session :left)) (right (%held-p session :right)))
+         (connected (and controller (px.controller:attached-p controller)))
+         (left (or (%held-p session :left)
+                   (and connected (px.controller:get-button controller :dpad-left))))
+         (right (or (%held-p session :right)
+                    (and connected (px.controller:get-button controller :dpad-right))))
+         (stick (if connected (%breaker-stick (px.controller:get-axis controller :left-x)) 0)))
     ;; Snap only when the pointer actually changes. This lets arrow movement
     ;; accumulate while the pointer is still, then resume direct mouse control
     ;; on the next motion without a stale pointer yanking the paddle back.
@@ -167,7 +205,8 @@
                                      (- (first mouse) (/ +breaker-paddle-width+ 2))))))
     (when (and (consp mouse) (numberp (first mouse)))
       (setf (getf state :last-mouse-x) (first mouse)))
-    (%breaker-move-paddle state (* 430d0 seconds (- (if right 1 0) (if left 1 0))))
+    (%breaker-move-paddle state (* 430d0 seconds
+                                   (max -1 (min 1 (+ stick (- (if right 1 0) (if left 1 0)))))))
     (unless (getf state :launched)
       (setf (getf state :ball-x) (+ (getf state :paddle-x) 45)))
     (%breaker-advance state seconds)))
@@ -206,6 +245,7 @@
 (defun make-prism-breaker (session)
   "Build the Prism Breaker callback bundle and cache all reusable art once."
   (let* ((screen (session-screen session))
+         (controller (%breaker-open-controller))
          (background (px.surface:make-surface '(900 620)))
          (brick-images (loop for color in '((255 88 122) (255 151 83) (255 211 91)
                                            (104 225 186) (83 196 255) (177 139 255))
@@ -220,23 +260,30 @@
     (px.draw:rect background '(52 79 114) '(863 114 3 442))
     (px.draw:rect background '(255 91 117) '(32 556 836 2))
     (px.surface:fill paddle '(64 224 244))
-    (px.draw:rect paddle '(210 255 255) '(8 2 88 3))
+    ;; A row is a live one-dimensional view. Its sliced highlight shares the
+    ;; paddle's pixels; close both views before the next frame can blit it.
+    (px.pixelarray:with-pixel-array (pixels paddle)
+      (loop for y from 2 to 4 do
+        (px.buffer:with-view (row (px.pixelarray:row pixels y))
+          (px.buffer:with-view (highlight (px.pixelarray:slice row '(8) '(88)))
+            (px.pixelarray:assign highlight '(210 255 255))))))
     (px.draw:rect paddle '(29 121 172) '(0 12 104 4))
     (px.draw:circle ball '(247 252 255) '(8 8) 7)
     (px.draw:circle ball '(131 231 255) '(6 6) 3)
     (make-mini-game :id :prism-breaker :title "PRISM BREAKER"
-          :instructions "Mouse / ← → move · Space launch"
+          :instructions "Mouse / ← → / stick move · Space / A launch"
           :state (%breaker-new-state)
           :on-event (lambda (state event current-session)
                       (let ((before (getf state :launched)))
-                        (%breaker-event state event current-session)
+                        (setf controller (%breaker-controller-event controller event))
+                        (%breaker-event state event current-session controller)
                         (when (and (not before) (getf state :launched))
                           (%play-tone current-session 540 :duration 0.08 :volume 0.20)))
                       state)
           :on-step (lambda (state seconds current-session)
                      (let ((previous-score (getf state :score))
                            (previous-lives (getf state :lives)))
-                       (%breaker-step state seconds current-session)
+                       (%breaker-step state seconds current-session controller)
                        (when (> (getf state :score) previous-score)
                          (%play-tone current-session (+ 620 (* 28 (getf state :combo)))
                                      :duration 0.07 :volume 0.18))

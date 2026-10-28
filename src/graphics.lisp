@@ -42,8 +42,10 @@
   (multiple-value-bind (x y) (pixelisp.internal:pair position)
     (list (round x) (round y))))
 
-(defun %color (value)
-  (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba value)))
+(defun %color (value surface)
+  "Normalize a color once per operation, preserving native packed integers."
+  (if (integerp value) (px.surface::%checked-mapped-pixel surface value)
+      (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba value))))
 
 (defun %drawing-clip (surface)
   (let ((clip (px.surface:get-clip surface)))
@@ -69,8 +71,13 @@
   (when (and (<= (first *clip*) x) (< x (third *clip*))
              (<= (second *clip*) y) (< y (fourth *clip*))
              (plusp coverage))
-    (let ((color (%color color)))
+    (let ((color color))
       (when (< coverage 1)
+        ;; Coverage blending needs channels; full samples keep the original
+        ;; packed bits. In particular, equal palette colors may have distinct
+        ;; indices, and unused bits in a truecolor pixel must survive a draw.
+        (when (integerp color)
+          (setf color (px.surface:unmap-rgb *target* color)))
         (let ((background (px.surface:get-at *target* (list x y))))
           (flet ((mix (source destination)
                    (round (+ (* coverage source) (* (- 1 coverage) destination)))))
@@ -79,7 +86,9 @@
                          (mix (pixelisp:color-g color) (pixelisp:color-g background))
                          (mix (pixelisp:color-b color) (pixelisp:color-b background))
                          (mix (pixelisp:color-a color) (pixelisp:color-a background)))))))
-      (px.surface:set-at *target* (list x y) color))
+      (if (integerp color)
+          (px.surface::%write-packed-pixel *target* x y color)
+          (px.surface:set-at *target* (list x y) color)))
     (if *damage*
         (setf (first *damage*) (min x (first *damage*))
               (second *damage*) (min y (second *damage*))
@@ -131,11 +140,11 @@
 
 (defun line (surface color start end &key (width 1))
   "Draw a straight segment, including both endpoints; return the affected Rect."
-  (%with-drawing (surface) (%stroke (%color color) (%point start) (%point end) (truncate width))))
+  (%with-drawing (surface) (%stroke (%color color surface) (%point start) (%point end) (truncate width))))
 
 (defun lines (surface color closed points &key (width 1))
   "Draw connected segments. CLOSED also connects the final point to the first."
-  (let ((points (map 'list #'%point points)) (color (%color color)))
+  (let ((points (map 'list #'%point points)) (color (%color color surface)))
     (unless (>= (length points) 2) (error "LINES needs at least two points."))
     (%with-drawing (surface)
       (loop for (first second) on points while second do (%stroke color first second width))
@@ -163,10 +172,10 @@
 
 (defun aaline (surface color start end &key (blend t))
   "Draw a one-pixel antialiased segment, blending coverage with existing pixels."
-  (%with-drawing (surface) (%aa-stroke (%color color) (%point start) (%point end) blend)))
+  (%with-drawing (surface) (%aa-stroke (%color color surface) (%point start) (%point end) blend)))
 (defun aalines (surface color closed points &key (blend t))
   "Draw connected antialiased segments and return their combined damaged Rect."
-  (let ((points (map 'list #'%point points)) (color (%color color)))
+  (let ((points (map 'list #'%point points)) (color (%color color surface)))
     (unless (>= (length points) 2) (error "AALINES needs at least two points."))
     (%with-drawing (surface)
       (loop for (first second) on points while second do (%aa-stroke color first second blend))
@@ -226,7 +235,7 @@
          (inner-radii (%fit-corner-radii
                        (mapcar (lambda (radius) (max 0 (- radius width))) radii)
                        inner-width inner-height))
-         (color (%color color)))
+         (color (%color color surface)))
     (%with-drawing (surface)
       (when (and (plusp w) (plusp h) (not (minusp width)))
         (loop for y from (max top (second *clip*)) below (min (+ top h) (fourth *clip*))
@@ -243,7 +252,7 @@
   (let* ((rect (pixelisp.internal:as-rect rectangle))
          (rx (/ (pixelisp:rect-width rect) 2)) (ry (/ (pixelisp:rect-height rect) 2))
          (cx (+ (pixelisp:rect-x rect) rx)) (cy (+ (pixelisp:rect-y rect) ry))
-         (inner-x (- rx width)) (inner-y (- ry width)) (color (%color color)))
+         (inner-x (- rx width)) (inner-y (- ry width)) (color (%color color surface)))
     (%with-drawing (surface)
       (when (and (plusp rx) (plusp ry) (not (minusp width)))
         (loop for y from (max (floor (- cy ry)) (second *clip*))
@@ -261,7 +270,7 @@
                    (draw-top-right t) (draw-top-left t) (draw-bottom-left t) (draw-bottom-right t))
   "Draw a circle or ring. Quadrant keywords can select individual quarters."
   (destructuring-bind (cx cy) (%point center)
-    (let ((radius (truncate radius)) (color (%color color)))
+    (let ((radius (truncate radius)) (color (%color color surface)))
       (%with-drawing (surface)
         ;; Like pygame, nonpositive radii leave the surface unchanged.
         (when (and (plusp radius) (not (minusp width)))
@@ -280,7 +289,7 @@
 
 (defun polygon (surface color points &key (width 0))
   "Fill a polygon using half-open scanline edges, or stroke its closed boundary."
-  (let ((points (map 'list #'%point points)) (color (%color color)))
+  (let ((points (map 'list #'%point points)) (color (%color color surface)))
     (unless (>= (length points) 3) (error "A polygon needs at least three points."))
     (%with-drawing (surface)
       (cond ((plusp width)
@@ -311,7 +320,7 @@
          (stop (if (< stop-angle start-angle) (+ stop-angle (* 2 pi)) stop-angle))
          (span (- stop start-angle))
          (steps (max 1 (ceiling (* (min span (* 2 pi)) (max rx ry) 2))))
-         (color (%color color)))
+         (color (%color color surface)))
     (%with-drawing (surface)
       (when (and (plusp rx) (plusp ry) (plusp width) (plusp span))
         (let ((previous nil))

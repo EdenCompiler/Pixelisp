@@ -36,7 +36,7 @@ continues to return packed values, just as pygame's PixelArray does."
 
 (defun %assignment-dimensions (target source-dimensions kind)
   "Check broadcasting rules and return TARGET's (width height)."
-  (let ((target-dimensions (px.buffer:dimensions target)))
+  (let ((target-dimensions (%pixel-logical-dimensions target)))
     (unless (= (length target-dimensions) 2)
       (error "Assignment target must have two dimensions."))
     (unless (eq kind :color)
@@ -55,7 +55,9 @@ continues to return packed values, just as pygame's PixelArray does."
     (:pixel-array
      (let* ((sx (if (= (first source-dimensions) 1) 0 x))
             (sy (if (= (second source-dimensions) 1) 0 y))
-            (packed (px.buffer:view-ref source sx sy)))
+            (packed (if (= (length (px.buffer:dimensions source)) 1)
+                        (px.buffer:view-ref source sx)
+                        (px.buffer:view-ref source sx sy))))
        ;; Packed integers are meaningful in the same native depth and masks.
        ;; For indexed formats this intentionally preserves palette indices,
        ;; even when the two surfaces have distinct palettes.
@@ -68,11 +70,13 @@ continues to return packed values, just as pygame's PixelArray does."
 (defun assign (target source)
   "Fill TARGET from SOURCE and return TARGET.
 
-TARGET may be a packed PixelArray slice or transpose. SOURCE may be one
-packed integer, color string, RGB(A) list or vector, a rank-two Lisp array of
-such values, or another PixelArray. Array and PixelArray dimensions must match
-TARGET or be one on an axis, in which case that axis broadcasts. PixelArray
-sources with matching depth and masks preserve raw values; other layouts
+TARGET may be a rank-one or rank-two packed PixelArray slice or transpose.
+SOURCE may be one packed integer, color string, RGB(A) list or vector, a
+rank-two Lisp array of such values, or another PixelArray. A one-dimensional
+PixelArray is treated as an N-by-1 source, so it can fill one row and broadcast
+across a two-dimensional target's height. PixelArray dimensions must match
+TARGET's logical shape or be one on an axis, in which case that axis
+broadcasts. PixelArray sources with matching depth and masks preserve raw values; other layouts
 remap their decoded colors. The complete result is
 validated and snapshotted before writing, so overlapping views are safe and
 bad input never leaves a partly changed target. For PixelArray sources with
@@ -85,7 +89,7 @@ copy visible colors by decoding and remapping."
                            (%validate-pixel-array source)))
          (source-dimensions
            (case kind
-             (:pixel-array (px.buffer:dimensions source))
+             (:pixel-array (%pixel-logical-dimensions source))
              (:array (array-dimensions source))))
          (same-layout-p
            (and source-surface
@@ -108,8 +112,7 @@ copy visible colors by decoding and remapping."
           (dotimes (y height)
             ;; The snapshot has already validated every value, so write the
             ;; packed integers directly without repeating color conversion.
-            (setf (px.buffer:view-ref target x y)
-                  (aref values (+ (* x height) y)))))))
+            (%pixel-set-at target (aref values (+ (* x height) y)) x y)))))
   target))
 
 (export 'assign)

@@ -12,7 +12,7 @@ updates only while active, and draws a common pause or end-state overlay.
 
 | Game | Goal and controls | Gameplay mechanics |
 | --- | --- | --- |
-| **Prism Breaker** | Clear all 60 prisms. Move the paddle with the mouse or Left/Right; press Space to serve. Three missed balls end the run. | Rect collisions and vector reflection drive wall, paddle, and brick bounces. Combos increase the score; generated tones mark serves, impacts, and lost balls. Cached surfaces keep brick and ball rendering on native blits. |
+| **Prism Breaker** | Clear all 60 prisms. Move with the mouse, Left/Right, or a gamepad's left stick/dpad; press Space or A to serve. Three missed balls end the run. | Rect collisions and vector reflection drive wall, paddle, and brick bounces. Combos increase the score; generated tones mark serves, impacts, and lost balls. Cached surfaces keep brick and ball rendering on native blits. |
 | **Orbit Patrol** | Turn with Left/Right or A/D, thrust with Up/W, and fire with Space. Destroy 12 targets while avoiding contact. | A rotating ship moves under vector-based thrust and inertia. Projectiles, target collisions, lives, and short invulnerability windows create the arcade challenge; sound gives feedback for shots and hits. |
 | **Crater Command** | Aim with Left/Right or horizontal scrolling, adjust shell power with Up/Down or vertical scrolling, and fire with Space. Destroy three reactors before running out of shells. | Shells follow a ballistic arc over a deformable landscape. Fractional trackpad deltas allow fine aim and power changes. Impacts remove terrain pixels and collision-mask bits together, so craters affect later shots. Generated impact tones reinforce hits. |
 | **Echo Grove** | Watch and listen to a four-pad sequence, then repeat it with keys 1–4, the arrow keys, or mouse clicks. Reach six rounds before losing three mistake lives. | The sequence grows one note at a time. Each pad has an always-visible color cue and an optional generated tone, so the game remains playable with audio disabled. |
@@ -26,11 +26,21 @@ joins rendered terrain to a mutable mask; Echo Grove combines event input,
 cached text, pad sprites sampling dim/lit frames from a shared image atlas,
 and optional audio. The atlas uses indexed 8-bit pixels; changing a shared
 highlight palette entry warns when one mistake life remains, and restores the
-normal highlight on restart without rebuilding pixels. Its melody cues are
+normal highlight on restart without rebuilding pixels. Fills and drawing use
+exact native palette indices, keeping warning cues distinct even in themes
+whose palette entries share an initial color. Its melody cues are
 generated WAV assets decoded from memory and cached for replay; other games
 construct sounds directly from sample arrays. Game state and update
 helpers are ordinary Lisp data and functions, which makes the rules testable
 without a native window.
+
+Prism Breaker opens the first mapped gamepad through a joystick/controller
+bridge, releases the temporary joystick, and keeps the independent controller
+for play. A stick dead zone suppresses resting drift; matching instance IDs
+keep other controllers' buttons from serving the ball. Device removal closes
+the old controller and allows another connected pad to take over; additions
+enable play without restarting. One-dimensional PixelArray rows and slices
+paint the paddle's highlights before its first blit.
 
 Orbit Patrol unpacks its thrust velocity with `px.math:swizzle`. Crater Command
 erases terrain alpha through `px.surface:get-view` while updating the collision

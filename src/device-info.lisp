@@ -15,8 +15,7 @@
 
 (defun get-guid (object)
   "Return OBJECT's hardware identifier as SDL's 32-character GUID string."
-  (check-type object joystick)
-  (let* ((guid (%get-guid (pixelisp.devices.internal:pointer object)))
+  (let* ((guid (%get-guid (%attached-pointer object 'get-guid)))
          (bytes (getf guid 'data)))
     (string-downcase (format nil "~{~2,'0X~}" (coerce bytes 'list)))))
 
@@ -25,8 +24,7 @@
 
 (defun get-power-level (object)
   "Return OBJECT's SDL power level as a keyword, including :UNKNOWN."
-  (check-type object joystick)
-  (let ((level (%current-power-level (pixelisp.devices.internal:pointer object))))
+  (let ((level (%current-power-level (%attached-pointer object 'get-power-level))))
     (if (<= 0 level (1- (length *power-levels*)))
         (aref *power-levels* level)
         :unknown)))

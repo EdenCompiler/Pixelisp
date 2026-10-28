@@ -272,7 +272,7 @@ TTC. Out-of-range indices and malformed font sources signal `px:error`;
 invalid argument types signal type errors. `font-index` reports the requested
 index, `num-faces` reports the collection's face count, and `path` returns a
 fresh namestring or NIL for memory inputs. These readers check the font's
-lifetime. Size remains in pixels, as described below.
+lifetime. Font sizes use points and are scaled to pixels at the font's DPI.
 
 ```lisp
 (with-open-file (asset #p"assets/interface.ttc" :element-type '(unsigned-byte 8))
@@ -310,6 +310,22 @@ pygame. `get-metrics` reports the original glyph metrics without these styles.
       (label (px.freetype:render font "Your turn" '(245 220 130) nil
                                 :style px.freetype:style-underline))
     (px.surface:blit screen label '(30 100))))
+```
+
+`resolution` returns the font's read-only DPI. Each font snapshots the module
+default at construction; later changes to the default do not resize existing
+fonts. `get-default-resolution` and `set-default-resolution` read and change
+that default. The default is 72 DPI, and passing zero to the setter resets it
+to 72. Constructors accept `:resolution`; omitted or zero selects the current
+module default. DPI must be an unsigned 32-bit integer.
+`init :resolution DPI` also sets the module default; a plain `init` leaves it
+unchanged. This affects direct FreeType/ftfont rendering, independently of
+SDL_ttf fonts.
+
+```lisp
+(px:with-resource (font (px.freetype:make-font nil 12 :resolution 144))
+  ;; 12 points at 144 DPI gives the same nominal pixel size as 24 at 72 DPI.
+  (px.freetype:render-to font screen '(20 30) "Ready" "white"))
 ```
 
 Read-only face information includes `scalable-p`, `fixed-width-p`, and
@@ -399,18 +415,22 @@ The reference is [pygame 2.6.1 FreeType](https://github.com/pygame/pygame/blob/2
 with native metric units described by [FreeType's face fields](https://freetype.org/freetype2/docs/reference/ft2-face_creation.html#ft_facerec).
 The default `size` property, constructors, sized metrics, and per-call `:size`
 arguments accept a positive scalar or a two-value list/vector
-`(horizontal vertical)`. Sizes retain Pixelisp's pixel units; pygame uses
-points and a configurable resolution. Scalar sizes keep the font's normal
-aspect ratio. A pair selects independent horizontal and vertical ppem; a zero
-vertical value, such as `'(24 0)`, selects equal ppem. Zero horizontal values
+`(horizontal vertical)` in points. FreeType converts these point sizes to
+pixels using the selected DPI. Scalar sizes keep the font's normal aspect
+ratio. A pair selects independent horizontal and vertical sizes; a zero
+vertical value, such as `'(24 0)`, selects equal axes. Zero horizontal values
 and undefined all-zero sizes are rejected. Bitmap-only fonts require a matching
-native strike and cannot be stretched to arbitrary sizes.
+embedded strike and cannot be stretched to arbitrary sizes.
 
 The property copies pairs on input and output. A per-call override leaves the
-default size unchanged, and invalid assignments preserve it. Fractional sizes
-round to native pixel sizes, with a minimum of one pixel on nonzero axes.
-Strong styling and underline sizing follow the vertical size. Pygame's layout
-cache remains unimplemented.
+default size unchanged, and invalid assignments preserve it. Fractional point
+sizes are rounded to FreeType's 1/64-point precision. Strong styling and
+underline sizing follow the vertical pixel size after DPI scaling.
+Nonzero dimensions below one point are clamped to one point by the native
+sizing API. Fixed-point dimensions must fit a portable signed 32-bit value;
+oversized requests are rejected before allocation or mutation. At 144 DPI,
+the bundled 8-pixel test bitmap strike takes 4 points, rather than 8 points.
+Pygame's layout cache remains unimplemented.
 
 ```lisp
 (px:with-resource (font (px.freetype:make-font nil '(16 32)))

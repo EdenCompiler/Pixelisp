@@ -16,7 +16,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `Rect`, `rect` | `px.rect`, `px:make-rect` | Integer geometry, validated updates, scalar/pair anchors, movement/scaling, aspect fitting, line clipping, in-place unions/clamping, object/hash-table collisions |
 | `Surface`, `surface`, `surflock` | `px.surface` | 8/12/15/16/24/32-bit surfaces, validated masks, editable indexed palettes, mapped writes, format conversion, owned/shared pixel storage with independent palette state, parent coordinates, pixel-format/blend queries, positioned rectangles, batch blits, RGB/RGBA blend effects, premultiplied alpha, RLE source hints, clipping, locks, typed views and bounded raw byte buffers |
 | `display` | `px.display` | Default window/framebuffer, selected monitor and desktop sizing, closest-mode queries, visibility/minimized state, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries, iconify request, screensaver control |
-| `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
+| `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, native packed integer colors, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
 | `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams with optional decoded format/palette preservation; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
 | `transform` | `px.transform` | Native format/index-preserving flip, nearest scaling, rotation, scale2x and chop; 24/32-bit smooth scaling, RGBA32 rotozoom, color operations, thresholding, Laplacian edges |
@@ -25,21 +25,21 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `mouse` | `px.mouse` | Position, relative movement, buttons, visibility, focus, relative mode |
 | `cursors`, `Cursor` | `px.cursors` | System/color/bitmap cursors and ASCII bitmap compilation |
 | `joystick` | `px.joystick` | Enumeration, hardware GUIDs, power-level reports, axes/buttons/hats/balls, lifetime, rumble |
-| `_sdl2.controller` | `px.controller`, `px.sdl2.controller` | Gamepad mappings, index names, native event-state controls, normalized axes/buttons, hotplug events, rumble and touchpads |
+| `_sdl2.controller` | `px.controller`, `px.sdl2.controller` | Independent joystick/controller bridges, editable mapping hashes, index names, native event-state controls, normalized axes/buttons, hotplug/remap events, rumble and touchpads |
 | `_sdl2.touch` | `px.touch`, `px.sdl2.touch` | Device/finger enumeration and normalized touch events |
 | `time` | `px.time` | Clocks, frame caps, elapsed/raw time, FPS, delay, pump-delivered timers |
 | `math`, `Vector2`, `Vector3` | `px.math` | Vector arithmetic, indexed components and swizzles with validated writes, updates, length scaling, geometry, scalar/vector interpolation, decimal rounding, bounded movement, degree/radian rotations, scalar clamp and polar/spherical conversion |
 | `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
 | `sprite` | `px.sprite` | CLOS sprites, source-image crops, single/ordered/RenderUpdates/layered/dirty groups, membership/update, old/new damage tracking and retry preservation, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
 | `font`, `sysfont` | `px.font`, `px.sysfont` | Fonts loaded from paths, encoded octets or binary streams with retained native storage; UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
-| `freetype`, `_freetype` | `px.freetype` | Path/octet/stream fonts, collection face selection and source metadata, direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
+| `freetype`, `_freetype` | `px.freetype` | Path/octet/stream fonts, collection face selection and source metadata, point sizes with per-font/default DPI, direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Output-device selection and allowed-setting negotiation; sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
 | `sndarray` | `px.sndarray` | Integer PCM and float32 copied sample arrays/live views, sound creation from arrays |
 | `surfarray` | `px.surfarray` | Packed/RGB/channel copies across native depths, packed views except 24-bit, full byte-channel views at 24/32-bit, array-to-surface operations |
 | `pixelcopy` | `px.pixelcopy` | Copy into existing arrays and map pixel formats |
-| `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, color setters, scalar fills, broadcast assignment with overlap snapshots, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
+| `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, 1D rows/columns, metadata, color setters, scalar fills, broadcast assignment with overlap snapshots, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
 | `BufferProxy`, `bufferproxy`, `newbuffer` | `px.buffer`, `px.bufferproxy` | Owner-backed views, bounds/lifetime checks, explicit release and slicing |
 | `camera`, camera backends | `px.camera` | Linux V4L2 enumeration/capture, negotiated resolution, queried controls, RGB/HSV/YUV conversions |
 | `scrap` | `px.scrap` | UTF-8 clipboard and primary selection; advertises text-only capabilities |
@@ -70,7 +70,10 @@ The exported Lisp symbols and module API guides describe the actual interface.
   Bulk assignment uses `assign` instead of Python slice syntax and accepts
   rank-two Lisp arrays. Matching native layouts copy packed values; different
   layouts remap colors at every depth, extending pygame's 24-bit-only remapping.
-  PixelArrays remain rank two, including singleton rows and columns.
+  Named `row`/`column` selectors produce rank-one views; singleton slices remain
+  rank two. Lines normalize to N×1 for assignment. Pygame 2.6.1 can reject some
+  corresponding non-square assignments, so differential line-broadcast fixtures
+  use square targets while Lisp tests define the rectangular behavior.
 - Surface constructors retain Pixelisp's existing RGB byte order at 24/32-bit;
   custom masks select other SDL layouts. RGB565 and indexed RGB332 defaults
   match conventional SDL formats. Palettes are opaque RGB; use a color key
@@ -83,11 +86,15 @@ The exported Lisp symbols and module API guides describe the actual interface.
 - Drawing, antialiasing, alpha rounding, filtered transforms, and text layout
   can differ from pygame's exact pixels. The implementation favors readable
   CPU algorithms; there is no performance or bit-exact parity claim.
+  Integer drawing colors use the destination's native format; full samples
+  retain exact palette indices and storage bits. Shared gfxdraw helpers accept
+  these integers too, beyond pygame.gfxdraw's documented color forms.
 - Direct FreeType strong/oblique/wide styling requires outline fonts; bitmap
   fonts can still be rendered and underlined. Bitmap wide styling and pygame's
-  layout cache are not implemented. Sizes use rounded pixels rather than
-  points and configurable DPI; independent axes accept positive width and a
-  nonnegative height, with zero height selecting equal ppem. Wide and underline
+  layout cache are not implemented. Sizes use fractional points and per-font
+  DPI, defaulting to 72; independent axes accept positive width and a
+  nonnegative height, with zero height selecting equal axes. FreeType's sizing
+  API clamps nonzero dimensions below one point to one point. Wide and underline
   styles cannot be rotated; vertical text cannot be underlined. Vertical
   placement uses FreeType metrics, with synthesized values when the font lacks
   them. Bounds include advance padding. Face metrics use native font units or
@@ -147,6 +154,11 @@ The exported Lisp symbols and module API guides describe the actual interface.
 - Clipboard transfer is text-only. Camera capture is V4L2/Linux. MIDI devices,
   camera controls, rumble, audio codecs, and other native capabilities depend
   on the installed backend and device, with explicit errors when unavailable.
+  Controller mapping hashes use string keys and merge supplied fields; pygame's
+  dictionary setter replaces the supplied binding set. Mapping headers are
+  preserved internally, and updates affect all devices sharing that SDL GUID.
+  Bridge results are independently owned wrappers; pygame can return a cached
+  joystick object when converting a controller.
 - Image and sound decoding keep caller-owned Lisp streams open. Pygame's
   SDL_mixer wrapper can close a supplied sound stream after decoding; Pixelisp
   leaves that decision to the caller. Memory sound inputs use the explicit
@@ -205,9 +217,21 @@ PixelArray assignment tests cover color forms, singleton broadcasting, native
 format remapping, palette indices, overlapping reversed/transposed views,
 closed views and validation before mutation. Prism Breaker shades its scoring
 rows by broadcasting a column of colors, then releases the view before drawing.
+Line-view tests cover negative selectors/strides, transposes, native-format
+copies, metadata copies, rank-preserving bit masks, dependent lifetimes and
+overlapping assignments. Controller tests use virtual devices for index shifts,
+independent bridge ownership, mapping edits, failed registration, detach and
+repeated shutdown. Native input tests check public event names and remapped IDs.
+Prism Breaker tests drive its stick, dpad and serve controls with a virtual pad.
 Direct FreeType source tests also exercise generated two-face TTC data,
 face selection, malformed input, source metadata and disposal after native
 configuration failures.
+Packed drawing tests cover every primitive across native depths, duplicate
+palette indices, unused storage bits, clipping, subviews, blend effects,
+invalid values and exceptional unlocking. Echo Grove tests distinguish pad
+and warning pixels even with duplicate initial palette colors. FreeType DPI
+tests cover default snapshots, fractional/independent axes, styles, memory
+sources, scoped size overrides, scaled bitmap strikes and failed setup cleanup.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
 The retained-text fixture compares immediate reuse. The local pygame build's

@@ -1,6 +1,18 @@
 (in-package #:pixelisp.examples.tests)
 (in-suite examples)
 
+(test echo-grove-warning-index-survives-duplicate-pad-colors
+  (px:with-init (:video nil)
+    ;; A custom theme can reuse the initial highlight color. Drawing by native
+    ;; index keeps warning cues separate from the pad itself after recoloring.
+    (px:with-resource (atlas (px.examples::%echo-pad-atlas
+                             '((245 250 255) (76 219 163) (255 146 99) (182 138 255))))
+      (is (= 8 (px.surface:get-at-mapped atlas '(10 133))))
+      (is (= 4 (px.surface:get-at-mapped atlas '(10 150))))
+      (px.surface:set-palette-at atlas 8 '(255 90 60))
+      (is (equal '(255 90 60 255) (px.color:to-list (px.surface:get-at atlas '(10 133)))))
+      (is (equal '(245 250 255 255) (px.color:to-list (px.surface:get-at atlas '(10 150))))))))
+
 (test echo-grove-cues-select-atlas-frames-during-gameplay
   (px:with-init (:video nil)
     (px.surface:with-surface (screen '(900 620))

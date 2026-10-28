@@ -39,6 +39,45 @@ GUID, useful for saving bindings across reconnects. `get-power-level` returns
 `:unknown`, `:empty`, `:low`, `:medium`, `:full`, or `:wired`; reported battery
 information depends on the device and SDL driver. Both reject disposed devices.
 
+`px.controller:from-joystick` opens a mapped controller for a live joystick;
+`as-joystick` opens a joystick for a live controller. Each result owns its own
+native reference. Closing the source handle leaves the result usable. Bridges
+resolve the current enumeration index from the stable instance ID, so removal
+of an earlier device does not select the wrong controller. Detached or unmapped
+devices signal `px:error`; wrong object kinds signal type errors.
+
+```lisp
+(when (px.controller:controller-p 0)
+  (px.joystick:with-joystick (original 0)
+    (px:with-resource (controller (px.controller:from-joystick original))
+      (px:with-resource (joystick (px.controller:as-joystick controller))
+        (format t "Same device: ~A~%"
+                (= (px.controller:instance-id controller)
+                   (px.joystick:instance-id joystick)))))))
+```
+
+`get-mapping` returns a fresh `equal` hash table with string keys and values,
+such as `"a"` → `"b0"` or `"leftx"` → `"a0"`. SDL metadata such as `"platform"`
+is included; the GUID and device-name header are private. `set-mapping` merges
+supplied fields into the current mapping, retaining omitted bindings and
+metadata. It returns SDL's 1 for a new mapping or 0 for an update. The update
+affects SDL's mapping for that GUID, including other matching controllers.
+Lisp types, empty strings, header overrides and field separators are checked
+before changing SDL; SDL checks the native binding grammar. The raw `mapping`
+and `add-mapping` string APIs remain available.
+
+```lisp
+(let ((bindings (px.controller:get-mapping controller)))
+  (setf (gethash "a" bindings) "b1"
+        (gethash "b" bindings) "b0")
+  (px.controller:set-mapping controller bindings))
+```
+
+Initialization is idempotent for each module. Module `quit` closes that module's
+live wrappers before releasing its SDL subsystem reference; the other module
+retains its own reference. `instance-id` remains readable on a detached but
+unclosed handle, so hotplug removal can be matched to the correct object.
+
 `px.controller:name-for-index` returns the name for a nonnegative enumeration
 index, or NIL if no mapped controller exists at that index. This index can
 change after hotplugging; use `instance-id` to identify an open device in events.
@@ -55,6 +94,11 @@ These module queries initialize the controller subsystem lazily. The switch
 leaves joystick events enabled independently and does not filter Lisp-posted
 events. The test suite verifies identity queries and the switch with SDL virtual
 devices; it does not verify a physical device's battery reporting.
+Native button, device, touchpad and controller-sensor events use hyphenated
+keywords such as `:controller-button-down` and `:controller-device-remapped`.
+Added-device `:which` values are enumeration indices; removed/remapped values
+are stable instance IDs. Buttons are integer SDL button IDs, and axis values
+are normalized like the polled device API.
 
 ## Text clipboard
 

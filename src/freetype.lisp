@@ -11,7 +11,8 @@
            #:size #:kerning #:antialiased #:origin #:style #:underline #:oblique #:strong #:wide
            #:strength #:underline-adjustment #:get-sized-height #:get-sized-ascender
            #:get-sized-descender #:name #:render-raw-to #:rotation #:vertical #:use-bitmap-strikes
-           #:load-font-bytes #:path #:font-index #:num-faces))
+           #:load-font-bytes #:path #:font-index #:num-faces #:resolution
+           #:get-default-resolution #:set-default-resolution))
 (in-package #:pixelisp.freetype)
 (defconstant style-normal 0)
 (defconstant style-underline 4)
@@ -20,8 +21,10 @@
 (defconstant style-wide 8)
 (defconstant style-default 255)
 (defvar *initialized* t)
+(defvar *default-resolution* 72)
 (defclass font (pixelisp.internal:resource)
   ((size :initarg :size :reader %size)
+   (resolution :initarg :resolution :reader %resolution)
    (kerning :initarg :kerning :initform t :accessor kerning)
    (antialiased :initarg :antialiased :initform t :accessor antialiased)
    (origin :initarg :origin :initform nil :accessor origin)
@@ -39,18 +42,30 @@
    ;; FT_New_Memory_Face borrows encoded data for the face's whole lifetime.
    ;; This allocation belongs to the font and is released after FT_Done_Face.
    (memory :initarg :memory :initform nil :accessor %memory)))
-(defun init () (setf *initialized* t))
+(defun init (&key (resolution nil resolution-p))
+  "Initialize the module, optionally selecting the default DPI for future fonts."
+  ;; Constructors call INIT too. Do not reset a caller's selected default on
+  ;; those ordinary calls, or a later memory font could unexpectedly use 72.
+  (when resolution-p (set-default-resolution resolution))
+  (setf *initialized* t))
 (defun quit ()
   (dolist (resource pixelisp.internal:*resources*)
     (when (typep resource 'font) (pixelisp.internal:dispose resource)))
   (setf *initialized* nil))
 (defun get-init () *initialized*)
 (defun get-version () (freetype2:freetype-version))
+(defun get-default-resolution ()
+  "Return the DPI used by new fonts without an explicit nonzero resolution."
+  *default-resolution*)
+(defun set-default-resolution (&optional (resolution 0))
+  "Set the module DPI; zero restores the 72 DPI default."
+  (check-type resolution (integer 0 #xffffffff))
+  (setf *default-resolution* (if (zerop resolution) 72 resolution)))
 (defun get-default-font () (px.font:get-default-font))
 (defun get-fonts () (px.font:get-fonts))
 (defun match-font (name &key bold italic) (px.font:match-font name :bold bold :italic italic))
 (defun %normalize-size (value)
-  "Copy and validate a scalar pixel size or a horizontal/vertical pixel pair."
+  "Copy and validate a scalar point size or a horizontal/vertical point pair."
   (cond
     ((realp value)
      (unless (> value 0) (error "A scalar font size must be positive."))
@@ -58,34 +73,44 @@
     ((and (typep value 'sequence) (not (stringp value)) (= (length value) 2))
      (let ((width (elt value 0)) (height (elt value 1)))
        (unless (and (realp width) (realp height) (>= width 0) (>= height 0))
-         (error "A font size pair must contain non-negative real pixel sizes."))
+         (error "A font size pair must contain non-negative real point sizes."))
        (when (zerop width)
          (if (zerop height)
-             (error "A zero size has no default FreeType pixel size.")
+             (error "A zero size has no default FreeType point size.")
              (error "A zero horizontal size cannot be paired with a non-zero vertical size.")))
        ;; Pygame treats a zero vertical component as an automatic axis. Keep
        ;; the pair as supplied so the getter is explicit and caller-independent.
        (list width height)))
-    (t (error "Font size must be a positive real pixel size or a two-value sequence."))))
+    (t (error "Font size must be a positive real point size or a two-value sequence."))))
 (defun %size-axes (value)
-  "Return native horizontal and vertical ppem values for a normalized size."
+  "Return signed 26.6 point sizes for FT_Set_Char_Size."
   (flet ((native-size (axis)
-           (let ((pixels (max 1 (round axis))))
-             ;; FT_Set_Pixel_Sizes takes unsigned C integers. Check before the
-             ;; FFI call so a bignum cannot silently wrap to an unrelated size.
-             (check-type pixels (unsigned-byte 32))
-             pixels)))
+           (let ((size (max 1 (round (* axis 64)))))
+             ;; Use the portable signed 32-bit fixed-point range even where
+             ;; FT_Long is wider. Validate before the FFI or native allocation.
+             (let ((maximum #x7fffffff))
+               (unless (typep size `(integer 0 ,maximum))
+                 (error 'type-error :datum axis
+                        :expected-type `(real 0 ,(/ maximum 64)))))
+             size)))
     (if (numberp value)
         (values 0 (native-size value))
         (values (native-size (first value))
                 (if (zerop (second value)) 0 (native-size (second value)))))))
 (defun %size-vertical (value)
-  "Return the vertical pixel dimension used by vertical metrics and strength."
+  "Return the vertical point dimension, using the other axis when it is zero."
   (if (numberp value) value (if (zerop (second value)) (first value) (second value))))
+(defun %size-vertical-pixels (font value)
+  (* (%size-vertical value) (/ (%resolution font) 72.0d0)))
 (defun %copy-size (value)
   (if (numberp value) value (copy-list value)))
-(defun %bitmap-size-valid-p (face value)
-  "Check bitmap-only faces against the nominal sizes reported by FreeType."
+(defun %size-pixels (points resolution)
+  "Mirror FreeType's 26.6 rounding and nearest-ppem bitmap strike selection."
+  (let* ((fixed-points (max 64 (round (* points 64))))
+         (fixed-pixels (floor (+ (* fixed-points resolution) 36) 72)))
+    (floor (+ fixed-pixels 32) 64)))
+(defun %bitmap-size-valid-p (face value resolution)
+  "Check bitmap-only faces against the DPI-scaled ppem reported by FreeType."
   (or (freetype2-types:ft-face-face-flags-test face '(:scalable))
       (let* ((count (freetype2-types:ft-face-num-fixed-sizes face))
              (sizes (cffi:mem-ref
@@ -99,57 +124,72 @@
               (let* ((record (cffi:mem-aptr sizes
                                             '(:struct freetype2-types::foreign-ft-bitmap-size)
                                             index))
-                     (point-size (floor (+ (cffi:foreign-slot-value
-                                            record '(:struct freetype2-types::foreign-ft-bitmap-size)
-                                            'freetype2-types::size) 32) 64))
-                     ;; FT_Set_Pixel_Sizes consumes ppem, not the dimensions
-                     ;; of the rasterized strike bitmap.
+                     ;; FT_Set_Char_Size selects by nominal ppem, not by the
+                     ;; dimensions of the rasterized strike bitmap.
                      (width (/ (cffi:foreign-slot-value
                                 record '(:struct freetype2-types::foreign-ft-bitmap-size)
                                 'freetype2-types::x-ppem) 64.0))
                      (height (/ (cffi:foreign-slot-value
                                  record '(:struct freetype2-types::foreign-ft-bitmap-size)
-                                 'freetype2-types::y-ppem) 64.0)))
-                (if (numberp value)
-                    (or (= value point-size) (and (= value width) (= value height)))
-                    (and (= (first value) width)
-                         (or (zerop (second value)) (= (second value) height)))))))))
-(defun %set-face-size (face value)
+                                 'freetype2-types::y-ppem) 64.0))
+                     (requested-width (%size-pixels (if (numberp value) value (first value))
+                                                    resolution))
+                     (requested-height (%size-pixels (%size-vertical value) resolution)))
+                (and (= requested-width (floor (+ width 1/2)))
+                     (= requested-height (floor (+ height 1/2)))))))))
+(defun %set-face-size (face value resolution)
   "Validate a size before changing the face, leaving it untouched on error."
   (multiple-value-bind (width height) (%size-axes value)
-    (unless (%bitmap-size-valid-p face value)
+    (unless (%bitmap-size-valid-p face value resolution)
       (error "The requested size is not available in this bitmap-only font."))
-    (freetype2:set-pixel-sizes face width height)))
+    (freetype2:set-char-size face width height resolution resolution)))
 (defun size (font)
-  "Return the default size in pixels; pairs are fresh (width height) lists."
+  "Return the default size in points; pairs are fresh (width height) lists."
   (check-type font font)
   (pixelisp.internal:ensure-live font)
   (%copy-size (%size font)))
 (defun (setf size) (value font)
-  "Set the default pixel size, accepting a scalar or (horizontal vertical) pair."
+  "Set the default point size, accepting a scalar or (horizontal vertical) pair."
   (check-type font font)
   (pixelisp.internal:ensure-live font)
   (let ((normalized (%normalize-size value)))
-    (%set-face-size (pixelisp.internal:handle font) normalized)
+    (%set-face-size (pixelisp.internal:handle font) normalized (%resolution font))
     (setf (slot-value font 'size) normalized)
     ;; SETF returns its new value; do not let that expose the stored pair.
     (%copy-size normalized)))
-(defun make-font (&optional source (size 16) &key (kerning t) (antialiased t) (font-index 0))
-  "Open a path, encoded octets, or binary stream at SIZE pixels.
+(defun %effective-resolution (resolution)
+  (check-type resolution (integer 0 #xffffffff))
+  (if (zerop resolution) *default-resolution* resolution))
+(defun resolution (font)
+  "Return this font's read-only rendering resolution in dots per inch."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%resolution font))
+(defun make-font (&optional source (size 16) &key (kerning t) (antialiased t)
+                                      (font-index 0) (resolution 0))
+  "Open a path, encoded octets, or binary stream at SIZE points.
 
 NIL selects the bundled font. FONT-INDEX selects a face in a font collection.
-Memory sources are copied and retained until the font is closed."
-  (%make-font-from-source source (%normalize-size size) font-index kerning antialiased))
-(defun font (&optional source (size 16) &key (kerning t) (antialiased t) (font-index 0))
-  (make-font source size :kerning kerning :antialiased antialiased :font-index font-index))
-(defun sys-font (name size &key bold italic)
-  (make-font (or (match-font name :bold bold :italic italic) (get-default-font)) size))
+Memory sources are copied and retained until the font is closed. RESOLUTION
+defaults to the current module DPI; zero selects that same module default."
+  (let ((normalized-size (%normalize-size size))
+        (effective-resolution (%effective-resolution resolution)))
+    (%make-font-from-source source normalized-size font-index kerning antialiased
+                            effective-resolution)))
+(defun font (&optional source (size 16) &key (kerning t) (antialiased t)
+                                    (font-index 0) (resolution 0))
+  (make-font source size :kerning kerning :antialiased antialiased
+             :font-index font-index :resolution resolution))
+(defun sys-font (name size &key bold italic (resolution 0))
+  (make-font (or (match-font name :bold bold :italic italic) (get-default-font))
+             size :resolution resolution))
 (setf (fdefinition 'sysfont) #'sys-font)
 (defun %face (font &optional requested-size)
   (check-type font font)
   (pixelisp.internal:ensure-live font)
   (%set-face-size (pixelisp.internal:handle font)
-                  (%normalize-size (or requested-size (%size font))))
+                  (%normalize-size (or requested-size (%size font)))
+                  (%resolution font))
   (pixelisp.internal:handle font))
 (defun %valid-style-p (value)
   (and (integerp value) (<= 0 value) (= 0 (logandc2 value 15))))
@@ -282,7 +322,8 @@ Memory sources are copied and retained until the font is closed."
 
 (defun %style-outline (font outline active-style requested-size)
   "Change the current glyph's shape before its placement and rotation."
-  (let* ((pixel-size (%size-vertical (%normalize-size (or requested-size (%size font)))))
+  (let* ((pixel-size (%size-vertical-pixels
+                      font (%normalize-size (or requested-size (%size font)))))
          (scale (if (logtest active-style style-wide) (+ 1 (strength font)) 1))
          (shear (if (logtest active-style style-oblique) 0.21255656 0)))
     (%transform-outline outline
@@ -340,7 +381,8 @@ the next character is loaded; no face-wide transform survives this call."
   "Return the ordinary horizontal underline mask and its baseline Y offset."
   (let* ((upem (max 1 (freetype2-types:ft-face-units-per-em face)))
          (adjustment (underline-adjustment font))
-         (font-size (%size-vertical (%normalize-size (or requested-size (%size font)))))
+         (font-size (%size-vertical-pixels
+                     font (%normalize-size (or requested-size (%size font)))))
          (position (if (minusp adjustment)
                        (* adjustment (freetype2-types:ft-face-ascender face))
                        (* -1 adjustment (freetype2-types:ft-face-underline-position face))))

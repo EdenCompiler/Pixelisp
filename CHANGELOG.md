@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Add direct FreeType point sizes with configurable module/default and per-font
+  DPI, read-only resolution queries, fractional sizes and DPI-aware bitmap
+  strike selection, style strength and underline metrics. The default remains
+  72 DPI; existing whole-number sizes retain their previous pixel scale.
+- Accept native packed integer colors in surface fills/pixel writes and drawing
+  primitives, retaining exact palette indices and unused storage bits on full
+  samples. Echo Grove paints its warning cues by index, including duplicate-color
+  themes. Antialiasing and blend effects decode channels when needed.
+- Add live PixelArray row/column selections, metadata readers, line transposes,
+  rank-preserving color operations and native-format line copies/broadcasts.
+- Add independently owned joystick/controller bridges and editable mapping
+  hashes, with stable-ID lookup, balanced subsystem cleanup and native input
+  event spelling/remapping fixes. Prism Breaker supports gamepad movement,
+  serving and hotplug replacement, and uses line views for paddle highlights.
 - Load direct FreeType and ftfont fonts from encoded octets and binary streams;
   select collection faces and inspect their source path, index and face count.
   Retain native source storage through face disposal and failed setup cleanup.

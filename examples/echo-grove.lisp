@@ -104,15 +104,15 @@
     (px.surface:set-palette sheet
       (append (mapcar (lambda (color) (mapcar (lambda (c) (round (* c 0.32))) color)) colors)
               colors '((245 250 255) (8 17 30))))
-    (loop for color in colors for column from 0 do
+    (loop for column below 4 do
       (loop for lit in '(nil t) for row from 0 do
         (let ((x (* column 334)) (y (* row 132)))
-          ;; Draw directly in the indexed format: converting a 32-bit frame
-          ;; during a native blit can quantize it before palette lookup.
-          (px.surface:fill sheet (if lit color (mapcar (lambda (c) (round (* c 0.32))) color))
-                           (list x y 334 132))
-          (px.surface:fill sheet (if lit '(245 250 255) color) (list x y 334 5))
-          (px.surface:fill sheet '(8 17 30) (list x (+ y 124) 334 8)))))
+          ;; Integer drawing colors select exact palette entries. The lit cue
+          ;; always stores index 8, even if a caller supplies matching pad and
+          ;; highlight colors; later warning recolors still affect that cue.
+          (px.surface:fill sheet (if lit (+ column 4) column) (list x y 334 132))
+          (px.draw:rect sheet (if lit 8 (+ column 4)) (list x y 334 5))
+          (px.draw:rect sheet 9 (list x (+ y 124) 334 8)))))
     sheet))
 
 (defun make-echo-grove (session)

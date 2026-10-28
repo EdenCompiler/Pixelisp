@@ -46,9 +46,10 @@
           (freetype2-ffi:ft-done-face (cffi:mem-ref storage :pointer)))
         (freetype2-types:libc-free storage)))))
 
-(defun %make-font-from-source (source size index kerning antialiased)
+(defun %make-font-from-source (source size index kerning antialiased resolution)
   "Transfer a successfully configured face and its optional bytes to a font."
   (%checked-native-long index)
+  (check-type resolution (integer 1 #xffffffff))
   (%size-axes size)
   (let* ((path (cond ((null source) (namestring (get-default-font)))
                      ((or (pathnamep source) (stringp source)) (namestring (pathname source)))
@@ -91,10 +92,11 @@
            (unless (< index (freetype2-types:ft-face-num-faces face))
              (error 'pixelisp:error :operation 'make-font
                     :message "Font index is outside the source collection"))
-           (%set-face-size face size)
+           (%set-face-size face size resolution)
            (let ((font (pixelisp.internal:register-resource
                         (make-instance 'font :handle face :path (when path (copy-seq path))
                                        :memory memory :font-index index :size size
+                                       :resolution resolution
                                        :kerning kerning :antialiased antialiased))))
              (setf complete t)
              font))
@@ -102,10 +104,12 @@
         (unwind-protect (when face (%release-face face))
           (%release-font-memory memory))))))
 
-(defun load-font-bytes (octets &optional (size 16) &key (font-index 0) (kerning t) (antialiased t))
+(defun load-font-bytes (octets &optional (size 16) &key (font-index 0) (kerning t)
+                                                           (antialiased t) (resolution 0))
   "Open encoded font octets, retaining an independent copy until disposal."
   (check-type octets (vector (unsigned-byte 8)))
-  (make-font octets size :font-index font-index :kerning kerning :antialiased antialiased))
+  (make-font octets size :font-index font-index :kerning kerning :antialiased antialiased
+             :resolution resolution))
 
 (defun path (font)
   "Return a fresh source namestring, or NIL for an in-memory font."

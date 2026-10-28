@@ -27,8 +27,9 @@ system color database is needed at runtime.
 
 `px.color:to-integer` returns `#xRRGGBBAA`; the single-integer constructor uses
 that same format, including alpha. This is distinct from the native packed
-pixel integers returned by `px.surface:map-rgb`. Surface color arguments accept
-names and hex strings; turn a canonical integer into a Color explicitly.
+pixel integers returned by `px.surface:map-rgb`. Surface `fill`/`set-at` and
+drawing primitives interpret integer colors in the destination's native format;
+turn a canonical integer into a Color explicitly with `px:make-color`.
 
 `update-color` mutates a Color after validating all inputs. Three separate
 numeric channels retain its alpha; a single parsed value replaces RGBA,
@@ -173,10 +174,15 @@ Palette operations on true-color surfaces signal
 
 `get-at-mapped` and `set-at-mapped` access native integers: palette indices at
 depth 8 and packed channel fields at higher depths. The setter checks bounds
-and respects the drawing clip. `set-colorkey` also accepts a native integer,
+and respects the drawing clip. `fill`, `set-at`, `set-colorkey`, and drawing
+primitives also accept a native integer,
 which distinguishes equal-looking palette entries. `get-colorkey` resolves
 the current palette color, so palette edits keep its result accurate. Masks,
 alpha conversion and color-key arrays retain that distinction too.
+Packed integers must fit the surface's pixel storage; 32-bit pixels also accept
+signed two's-complement values. Full-coverage drawing preserves exact indices
+and unused storage bits. Antialiasing and blend effects decode channels to
+compute their result and can select a different palette entry.
 
 ```lisp
 (px.surface:with-surface (sprite '(16 16) :depth 8)
@@ -530,6 +536,15 @@ exit. `ref` reads a native packed integer; its `setf` writer accepts packed
 integers, Colors, RGB(A) lists/vectors, and color names or hexadecimal strings.
 Signed 32-bit integers are interpreted as their packed two's-complement bits.
 
+`row` and `column` select writable one-dimensional views from a two-dimensional
+PixelArray. Indices can be negative, counting back from the selected axis's end.
+These views share pixels and retain their parent; close them before closing the
+parent or disposing its surface. `slice` works on either rank, including reversed
+steps. `surface` returns the backing Surface, while `itemsize`, `ndim`, `shape`,
+and `strides` report native pixel bytes, rank, dimensions, and signed byte strides.
+Shape/stride lists are independent copies, and all readers check the view's
+lifetime. Generic buffer views are not accepted as PixelArrays.
+
 `assign` fills a whole view or a slice and returns that view. Its source can be
 one color, a rank-two Lisp array of colors/packed integers, or another
 PixelArray. Array dimensions use X/Y order. Each source dimension must match
@@ -537,6 +552,10 @@ the destination or be 1, which broadcasts that column or row. For example,
 `#2A(("red" "gold" "navy"))` repeats one three-pixel column across the width
 of a three-pixel-high destination. RGB(A) lists and vectors always mean one
 color; use a rank-two array for a collection of pixels.
+One-dimensional PixelArray arguments are interpreted as an N×1 row for
+assignment, even when selected from a column. A line can fill a two-dimensional
+target of width N, or receive an N×1 source. Transposing a line yields a `(1 N)`
+view, which instead broadcasts its colors across each horizontal row.
 
 Assignments snapshot and validate the result before writing, so overlapping
 slices, reversals, and transposes can safely read their own destination.
@@ -571,9 +590,22 @@ Invalid options are checked before replacement starts.
 
 `transpose` swaps the X/Y axes without copying pixels. It retains its parent
 view, shares writes, and reports swapped byte strides, including negative
-strides from slices. Close it before the parent view. `make-surface` returns an
+strides from slices. Transposing a one-dimensional line adds a singleton first
+axis, with strides `(N * itemsize, original-stride)`. Close it before the parent
+view. `make-surface` returns an
 owned image copied from a view, preserving its native format, palette, indices
-and per-pixel alpha capability. It resets modulation and color-key state.
+and per-pixel alpha capability. Lines produce N×1 images. It resets modulation
+and color-key state. `extract` and `compare` preserve their input rank in the
+returned bit arrays; comparison requires equal shapes and ranks.
+
+```lisp
+(px.pixelarray:with-pixel-array (pixels image)
+  (px.buffer:with-view (bottom (px.pixelarray:row pixels -1))
+    (px.pixelarray:assign bottom "gold")
+    (px.buffer:with-view (backwards
+                           (px.pixelarray:slice bottom '(3) '(4) '(-1)))
+      (setf (px.pixelarray:ref backwards 0) "tomato"))))
+```
 
 ```lisp
 (px.pixelarray:with-pixel-array (pixels image)

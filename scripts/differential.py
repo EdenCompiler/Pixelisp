@@ -6,6 +6,7 @@ runtime dependencies. Keep cases small and deterministic so a mismatch points
 to an observable semantic difference rather than a renderer or screenshot.
 """
 import json
+import ctypes
 from io import BytesIO
 import os
 from pathlib import Path
@@ -53,8 +54,58 @@ CASE_NAMES = [
     "indexed palettes and subsurfaces", "native pixel widths",
     "indexed nearest transforms", "indexed image decoding",
     "PixelArray color assignment and broadcasting", "PixelArray native copy formats",
+    "PixelArray line views and metadata", "PixelArray line assignment and broadcasting",
+    "controller bridges and mapping edits",
     "FreeType memory sources and collections",
+    "native packed drawing colors", "FreeType DPI scaling",
 ]
+
+
+def native_packed_drawing_colors():
+    masks = {8: (0, 0, 0, 0), 12: (0xf00, 0xf0, 0xf, 0),
+             15: (0x7c00, 0x3e0, 0x1f, 0), 16: (0xf800, 0x7e0, 0x1f, 0),
+             24: (0xff, 0xff00, 0xff0000, 0), 32: (0xff, 0xff00, 0xff0000, 0xff000000)}
+    result = []
+    for depth, channels in masks.items():
+        surface = pygame.Surface((5, 4), pygame.SRCALPHA if depth == 32 else 0, depth, channels)
+        if depth == 8:
+            surface.set_palette_at(5, (200, 120, 70))
+            surface.set_palette_at(7, (200, 120, 70))
+        base = 5 if depth == 8 else surface.map_rgb((10, 20, 30, 40))
+        ink = 7 if depth == 8 else surface.map_rgb((200, 120, 70, 170))
+        surface.fill(base)
+        surface.set_clip((1, 1, 3, 2))
+        damage = pygame.draw.rect(surface, ink, (0, 0, 3, 3))
+        pygame.draw.line(surface, ink, (3, 1), (3, 2))
+        surface.set_at((0, 0), 0)  # Outside the clip.
+        result.append([list(damage), [surface.get_at_mapped((x, y)) & 0xffffffff
+                                     for y in range(4) for x in range(5)]])
+    return result
+
+
+def freetype_dpi_scaling():
+    import pygame.freetype as ft
+    ft.init()
+    original = ft.get_default_resolution()
+    path = str(ROOT / "assets/fonts/DejaVuSans.ttf")
+    try:
+        ft.set_default_resolution(96)
+        default = ft.Font(path, 16)
+        ft.set_default_resolution(144)
+        other = ft.Font(path, 16)
+        ft.set_default_resolution()
+        metrics = []
+        for dpi in [72, 96, 144]:
+            font = ft.Font(path, 16.25, resolution=dpi)
+            metrics.append([font.resolution, font.get_sized_height(),
+                            font.get_sized_ascender(), font.get_sized_descender(),
+                            list(map(round, font.get_metrics("A")[0])),
+                            list(map(round, font.get_metrics("A", size=(12.5, 9.25))[0]))])
+        bitmap = ft.Font(str(ROOT / "tests/fixtures/tiny-mono.bdf"), 4, resolution=144)
+        return [[default.resolution, other.resolution, ft.get_default_resolution()],
+                metrics, bitmap.get_sized_height(), bitmap.get_sized_glyph_height()]
+    finally:
+        ft.set_default_resolution(original)
 
 
 def pixelarray_assignment_and_broadcasting():
@@ -101,6 +152,77 @@ def pixelarray_native_copy_formats():
     return result
 
 
+def pixelarray_line_views_and_metadata():
+    masks = (0xff, 0xff00, 0xff0000, 0xff000000)
+    surface = pygame.Surface((4, 3), pygame.SRCALPHA, 32, masks)
+    with pygame.PixelArray(surface) as pixels:
+        for y in range(3):
+            for x in range(4):
+                pixels[x, y] = (1 + x + y * 4, 0, 0, 255)
+        row = pixels[:, -1]
+        column = pixels[2, :]
+        try:
+            row[1] = (90, 0, 0, 255)
+            column[0] = (80, 0, 0, 255)
+            transposed = column.transpose()
+            try:
+                copied = row.make_surface()
+                return [list(row.shape), list(row.strides), row.ndim, row.itemsize,
+                        list(column.shape), list(column.strides), column.ndim, column.itemsize,
+                        list(transposed.shape), list(transposed.strides),
+                        list(copied.get_size()), copied.get_bitsize(), red_values(copied),
+                        red_values(surface), int(row.surface is surface and column.surface is surface)]
+            finally:
+                transposed.close()
+        finally:
+            row.close()
+            column.close()
+
+
+def pixelarray_line_assignment_and_broadcasting():
+    # pygame 2.6.1 rejects some non-square 1D-to-2D assignments. A square
+    # target compares its supported broadcast path; Lisp tests cover rectangles.
+    surface = pygame.Surface((4, 4), 0, 32)
+    with pygame.PixelArray(surface) as pixels:
+        for y in range(4):
+            for x in range(4):
+                pixels[x, y] = 1 + x + y * 4
+
+        line = pixels[:, 0]
+        reverse = line[::-1]
+        try:
+            line[:] = reverse
+        finally:
+            reverse.close()
+            line.close()
+        after_reverse = [[int(pixels[x, y]) for x in range(4)] for y in range(4)]
+
+        line = pixels[:, 0]
+        try:
+            pixels[:] = line
+        finally:
+            line.close()
+        after_broadcast = [[int(pixels[x, y]) for x in range(4)] for y in range(4)]
+
+        column = pixels[2, :]
+        try:
+            for y, value in enumerate((10, 20, 30, 40)):
+                column[y] = value
+            transposed = column.transpose()
+            try:
+                transposed_shape = list(transposed.shape)
+                transposed_strides = list(transposed.strides)
+                pixels[:] = transposed
+            finally:
+                transposed.close()
+        finally:
+            column.close()
+        after_transposed_broadcast = [
+            [int(pixels[x, y]) for x in range(4)] for y in range(4)]
+        return [after_reverse, after_broadcast, transposed_shape,
+                transposed_strides, after_transposed_broadcast]
+
+
 def freetype_memory_sources_and_collections():
     import pygame.freetype as ft
     ft.init()
@@ -128,6 +250,64 @@ def freetype_memory_sources_and_collections():
     return [int(memory.render_raw("Memory face") == expected),
             stream_matches,
             int(selected.render_raw("Memory face") == expected), rejected]
+
+
+def controller_bridges_and_mapping_edits():
+    import pygame._sdl2.controller as controllers
+    joystick_was_ready = pygame.joystick.get_init()
+    controller_was_ready = controllers.get_init()
+    pygame.joystick.init()
+    controllers.init()
+    # Use the SDL linked to pygame, which can differ from the system SDL used
+    # by Lisp. These virtual-device calls are optional test tooling only.
+    library = ctypes.CDLL(pygame.base.__file__)
+
+    def native(name, result, *arguments):
+        function = getattr(library, name)
+        function.restype, function.argtypes = result, arguments
+        return function
+
+    attach = native("SDL_JoystickAttachVirtual", ctypes.c_int, *([ctypes.c_int] * 4))
+    detach = native("SDL_JoystickDetachVirtual", ctypes.c_int, ctypes.c_int)
+    add_mapping = native("SDL_GameControllerAddMapping", ctypes.c_int, ctypes.c_char_p)
+    lookup = native("SDL_JoystickFromInstanceID", ctypes.c_void_p, ctypes.c_int32)
+    set_button = native("SDL_JoystickSetVirtualButton", ctypes.c_int,
+                        ctypes.c_void_p, ctypes.c_int, ctypes.c_uint8)
+    update = native("SDL_JoystickUpdate", None)
+    index = attach(1, 6, 21, 1)
+    if index < 0:
+        raise RuntimeError("SDL could not attach the reference virtual controller")
+    joystick = controller = duplicate = None
+    try:
+        joystick = pygame.joystick.Joystick(index)
+        text = (f"{joystick.get_guid()},Pixelisp Reference Pad,"
+                "a:b0,b:b1,leftx:a0,platform:Linux,")
+        if add_mapping(text.encode()) < 0:
+            raise RuntimeError("SDL rejected the reference mapping")
+        controller = controllers.Controller.from_joystick(joystick)
+        duplicate = controller.as_joystick()
+        bindings = controller.get_mapping()
+        original_a = bindings["a"]
+        bindings["a"] = "b1"
+        result = controller.set_mapping(bindings)
+        set_button(lookup(joystick.get_instance_id()), 1, 1)
+        update()
+        return [int(joystick.get_instance_id() == duplicate.get_instance_id()),
+                int(original_a == "b0"), result,
+                int(controller.get_mapping()["a"] == "b1"),
+                int(controller.get_button(pygame.CONTROLLER_BUTTON_A))]
+    finally:
+        if duplicate is not None:
+            duplicate.quit()
+        if controller is not None:
+            controller.quit()
+        if joystick is not None:
+            joystick.quit()
+        detach(index)
+        if not controller_was_ready:
+            controllers.quit()
+        if not joystick_was_ready:
+            pygame.joystick.quit()
 
 
 def indexed_palettes_and_subsurfaces():
@@ -1248,7 +1428,10 @@ def reference():
         indexed_palettes_and_subsurfaces(), native_pixel_widths(),
         indexed_nearest_transforms(), indexed_image_decoding(),
         pixelarray_assignment_and_broadcasting(), pixelarray_native_copy_formats(),
+        pixelarray_line_views_and_metadata(), pixelarray_line_assignment_and_broadcasting(),
+        controller_bridges_and_mapping_edits(),
         freetype_memory_sources_and_collections(),
+        native_packed_drawing_colors(), freetype_dpi_scaling(),
     ]
 
 

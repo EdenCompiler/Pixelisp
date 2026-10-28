@@ -12,7 +12,8 @@
 (defpackage #:pixelisp.pixelarray
   (:use #:cl) (:nicknames #:px.pixelarray) (:shadow #:close #:replace)
   (:export #:make-pixel-array #:pixel-array #:ref #:close #:slice #:make-surface
-           #:replace #:extract #:compare #:transpose #:with-pixel-array))
+           #:replace #:extract #:compare #:transpose #:row #:column
+           #:surface #:itemsize #:ndim #:shape #:strides #:with-pixel-array))
 
 (in-package #:pixelisp.surfarray)
 (defun %packed-ref (surface x y)
@@ -217,7 +218,7 @@
           do (setf base (px.buffer:owner base)))
     (unless (and (px.buffer::%packed-view-p pixels)
                  (px.buffer::%packed-view-p base)
-                 (= (length (px.buffer:dimensions pixels)) 2)
+                 (member (length (px.buffer:dimensions pixels)) '(1 2))
                  (= (length (px.buffer:dimensions base)) 2)
                  (equal (px.buffer:owner base) surface)
                  (equal (px.buffer:dimensions base)
@@ -225,8 +226,73 @@
                  (equal (px.buffer:strides base)
                         (list (px.surface:get-bytesize surface) (px.surface:get-pitch surface)))
                  (equal (px.buffer:element-type pixels) `(unsigned-byte ,bits)))
-      (error "Expected a live two-dimensional packed pixel array."))
+      (error "Expected a live one- or two-dimensional packed pixel array."))
     surface))
+(defun surface (pixels)
+  "Return the live Surface backing PIXELS, including dependent views."
+  (%validate-pixel-array pixels))
+(defun itemsize (pixels)
+  "Return the number of native bytes in each packed pixel."
+  (px.surface:get-bytesize (%validate-pixel-array pixels)))
+(defun ndim (pixels)
+  "Return the rank of this PixelArray view (one or two)."
+  (%validate-pixel-array pixels)
+  (length (px.buffer:dimensions pixels)))
+(defun shape (pixels)
+  "Return a fresh list containing this PixelArray view's dimensions."
+  (%validate-pixel-array pixels)
+  (px.buffer:dimensions pixels))
+(defun strides (pixels)
+  "Return a fresh list of signed byte strides for this PixelArray view."
+  (%validate-pixel-array pixels)
+  (px.buffer:strides pixels))
+(defun %pixel-logical-dimensions (pixels)
+  "Treat a 1D PixelArray as a width-by-one array for pixel traversal."
+  (let ((dimensions (px.buffer:dimensions pixels)))
+    (if (= (length dimensions) 1) (list (first dimensions) 1) dimensions)))
+(defun %pixel-ref-at (pixels x y)
+  "Read logical coordinate X,Y from either a 1D or 2D view."
+  (if (= (length (px.buffer:dimensions pixels)) 1) (ref pixels x) (ref pixels x y)))
+(defun %pixel-set-at (pixels value x y)
+  "Write a validated packed value at logical coordinate X,Y."
+  (apply #'(setf px.buffer:view-ref) value pixels
+         (if (= (length (px.buffer:dimensions pixels)) 1) (list x) (list x y))))
+(defun %pixel-index (index length)
+  "Validate an integer selector index and wrap valid negative indices."
+  (unless (integerp index)
+    (error 'type-error :datum index :expected-type 'integer))
+  (let ((wrapped (if (minusp index) (+ length index) index)))
+    (unless (and (plusp length) (<= 0 wrapped) (< wrapped length))
+      (error "PixelArray selector index ~D is outside an axis of length ~D." index length))
+    wrapped))
+(defun row (pixels y)
+  "Return a writable dependent 1D view of row Y; negative indices wrap."
+  (%validate-pixel-array pixels)
+  (unless (= (ndim pixels) 2) (error "ROW requires a two-dimensional PixelArray."))
+  (let* ((dimensions (px.buffer:dimensions pixels))
+         (wrapped (%pixel-index y (second dimensions)))
+         (strides (px.buffer:strides pixels)))
+    (px.buffer::%make-packed-view
+     :owner pixels :dimensions (list (first dimensions))
+     :strides (list (first strides))
+     :byte-offset (+ (px.buffer:byte-offset pixels) (* wrapped (second strides)))
+     :element-type (px.buffer:element-type pixels)
+     :reader (lambda (x) (ref pixels x wrapped))
+     :writer (lambda (value x) (setf (ref pixels x wrapped) value)))))
+(defun column (pixels x)
+  "Return a writable dependent 1D view of column X; negative indices wrap."
+  (%validate-pixel-array pixels)
+  (unless (= (ndim pixels) 2) (error "COLUMN requires a two-dimensional PixelArray."))
+  (let* ((dimensions (px.buffer:dimensions pixels))
+         (wrapped (%pixel-index x (first dimensions)))
+         (strides (px.buffer:strides pixels)))
+    (px.buffer::%make-packed-view
+     :owner pixels :dimensions (list (second dimensions))
+     :strides (list (second strides))
+     :byte-offset (+ (px.buffer:byte-offset pixels) (* wrapped (first strides)))
+     :element-type (px.buffer:element-type pixels)
+     :reader (lambda (y) (ref pixels wrapped y))
+     :writer (lambda (value y) (setf (ref pixels wrapped y) value)))))
 (defun %packed-color (surface color)
   "Map a normal RGB(A) value to SURFACE, or accept an already packed integer."
   (if (integerp color)
@@ -267,7 +333,7 @@
 (defun make-surface (pixels)
   "Copy PIXELS into matching native storage, preserving palette indices."
   (let* ((surface (%validate-pixel-array pixels))
-         (dimensions (px.buffer:dimensions pixels))
+         (dimensions (%pixel-logical-dimensions pixels))
          (result (px.surface::%make-like surface dimensions)))
     (handler-case
         (destructuring-bind (width height) dimensions
@@ -275,7 +341,7 @@
           (unwind-protect
                (dotimes (x width)
                  (dotimes (y height)
-                   (px.surface::%write-packed-pixel result x y (ref pixels x y))))
+                   (px.surface::%write-packed-pixel result x y (%pixel-ref-at pixels x y))))
             (px.surface:unlock result))
           result)
       (error (condition) (px:dispose result) (error condition)))))
@@ -290,12 +356,12 @@ before the first write."
          (old-packed (%packed-color surface old-color))
          (new-packed (%packed-color surface new-color)))
     (multiple-value-bind (distance weights) (%normalized-options distance weights)
-      (destructuring-bind (width height) (px.buffer:dimensions pixels)
+      (destructuring-bind (width height) (%pixel-logical-dimensions pixels)
         (dotimes (x width)
           (dotimes (y height)
-            (let ((pixel (ref pixels x y)))
+            (let ((pixel (%pixel-ref-at pixels x y)))
               (when (%matches-color-p surface pixel old-packed distance weights)
-                (setf (ref pixels x y) new-packed)))))))
+                (%pixel-set-at pixels new-packed x y)))))))
   pixels))
 (defun extract (pixels color &key (distance 0) (weights '(0.299 0.587 0.114)))
   "Return a specialized bit array, with 1 for pixels matching COLOR.
@@ -304,13 +370,16 @@ Exact matching includes alpha; positive-distance RGB matching ignores alpha."
   (let* ((surface (%validate-pixel-array pixels))
          (packed-color (%packed-color surface color)))
     (multiple-value-bind (distance weights) (%normalized-options distance weights)
-      (destructuring-bind (width height) (px.buffer:dimensions pixels)
-        (let ((result (make-array (list width height) :element-type 'bit)))
+      (destructuring-bind (width height) (%pixel-logical-dimensions pixels)
+        (let ((result (make-array (shape pixels) :element-type 'bit)))
           (dotimes (x width result)
             (dotimes (y height)
-              (setf (aref result x y)
-                    (if (%matches-color-p surface (ref pixels x y) packed-color distance weights)
-                        1 0)))))))))
+              (let ((value (if (%matches-color-p surface (%pixel-ref-at pixels x y)
+                                                packed-color distance weights)
+                               1 0)))
+                (if (= (ndim pixels) 1)
+                    (setf (aref result x) value)
+                    (setf (aref result x y) value))))))))))
 (defun compare (first second &key (distance 0) (weights '(0.299 0.587 0.114)))
   "Return a specialized bit array, with 1 where decoded colors match.
 
@@ -318,28 +387,42 @@ At distance zero, RGBA components are compared exactly. Positive distance
 uses weighted RGB distance and ignores alpha. Surface layouts may differ."
   (let* ((first-surface (%validate-pixel-array first))
          (second-surface (%validate-pixel-array second)))
-    (unless (equal (px.buffer:dimensions first) (px.buffer:dimensions second))
+    (unless (and (= (ndim first) (ndim second))
+                 (equal (shape first) (shape second)))
       (error "Pixel array dimensions differ."))
     (multiple-value-bind (distance weights) (%normalized-options distance weights)
-      (destructuring-bind (width height) (px.buffer:dimensions first)
-        (let ((result (make-array (list width height) :element-type 'bit)))
+      (destructuring-bind (width height) (%pixel-logical-dimensions first)
+        (let ((result (make-array (shape first) :element-type 'bit)))
           (dotimes (x width result)
             (dotimes (y height)
-              (let ((left (px.surface:unmap-rgb first-surface (ref first x y)))
-                    (right (px.surface:unmap-rgb second-surface (ref second x y))))
-                (setf (aref result x y)
-                      (if (if (zerop distance)
-                              (equal (px.color:to-list left) (px.color:to-list right))
-                              (<= (%color-distance left right weights) distance))
-                          1 0))))))))))
+              (let ((left (px.surface:unmap-rgb first-surface (%pixel-ref-at first x y)))
+                    (right (px.surface:unmap-rgb second-surface (%pixel-ref-at second x y))))
+                (let ((value (if (if (zerop distance)
+                                    (equal (px.color:to-list left) (px.color:to-list right))
+                                    (<= (%color-distance left right weights) distance))
+                                 1 0)))
+                  (if (= (ndim first) 1)
+                      (setf (aref result x) value)
+                      (setf (aref result x y) value)))))))))))
 (defun transpose (pixels)
-  "Return a writable dependent view with the two pixel axes swapped."
-  (%validate-pixel-array pixels)
-  (let ((dimensions (px.buffer:dimensions pixels))
+  "Swap 2D axes, or add a length-one first axis to a 1D PixelArray."
+  (let ((surface (%validate-pixel-array pixels))
+        (dimensions (px.buffer:dimensions pixels))
         (strides (px.buffer:strides pixels)))
-    (px.buffer::%make-packed-view
-     :owner pixels :dimensions (reverse dimensions) :strides (reverse strides)
-     :byte-offset (px.buffer:byte-offset pixels)
-     :element-type (px.buffer:element-type pixels)
-     :reader (lambda (x y) (ref pixels y x))
-     :writer (lambda (value x y) (setf (ref pixels y x) value)))))
+    (if (= (length dimensions) 1)
+        (px.buffer::%make-packed-view
+         :owner pixels :dimensions (list 1 (first dimensions))
+         ;; pygame reports the singleton axis as one full logical row, even
+         ;; when the selected line itself has a negative or nonunit stride.
+         :strides (list (* (first dimensions) (px.surface:get-bytesize surface))
+                        (first strides))
+         :byte-offset (px.buffer:byte-offset pixels)
+         :element-type (px.buffer:element-type pixels)
+         :reader (lambda (x y) (declare (ignore x)) (ref pixels y))
+         :writer (lambda (value x y) (declare (ignore x)) (setf (ref pixels y) value)))
+        (px.buffer::%make-packed-view
+         :owner pixels :dimensions (reverse dimensions) :strides (reverse strides)
+         :byte-offset (px.buffer:byte-offset pixels)
+         :element-type (px.buffer:element-type pixels)
+         :reader (lambda (x y) (ref pixels y x))
+         :writer (lambda (value x y) (setf (ref pixels y x) value))))))

@@ -47,6 +47,7 @@
           (native :ctouchpad :y) 0.75
           (native :ctouchpad :pressure) 0.5)
     (let ((event (px.event::%decode-native native)))
+      (is (eq :controller-touchpad-motion (px.event:type event)))
       (is (= 31 (px.event:attribute event :which)))
       (is (= 2 (px.event:attribute event :touchpad)))
       (is (= 0 (px.event:attribute event :finger)))
@@ -60,6 +61,7 @@
           (native :csensor :data 1) -0.25
           (native :csensor :data 2) 1.5)
     (let ((event (px.event::%decode-native native)))
+      (is (eq :controller-sensor-update (px.event:type event)))
       (is (= 7 (px.event:attribute event :which)))
       (is (= 2 (px.event:attribute event :sensor)))
       (is (equal '(0.125 -0.25 1.5) (px.event:attribute event :data)))))

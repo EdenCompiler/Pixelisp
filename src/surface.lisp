@@ -396,6 +396,23 @@ Unrecognized SDL modes are returned as their exact integer value."
      (pixelisp.internal:%ptr (sdl2:surface-format (pixelisp.internal:handle surface))) r g b a)
     (pixelisp:make-color (cffi:mem-ref r :uint8) (cffi:mem-ref g :uint8)
                          (cffi:mem-ref b :uint8) (cffi:mem-ref a :uint8))))
+
+(defun %checked-mapped-pixel (surface value)
+  "Validate a native pixel without decoding or choosing another palette index."
+  (check-surface surface)
+  (let* ((bits (* 8 (get-bytesize surface)))
+         (maximum (1- (ash 1 bits)))
+         (minimum (if (= bits 32) (- (ash 1 31)) 0)))
+    (unless (typep value `(integer ,minimum ,maximum))
+      (error 'type-error :datum value :expected-type `(integer ,minimum ,maximum)))
+    ;; SDL uses Uint32 pixels. Accept a signed 32-bit representation just as
+    ;; PixelArray does, but keep smaller formats strictly within their storage.
+    (ldb (byte bits 0) value)))
+
+(defun %color-pixel (surface color)
+  "Resolve a drawing color, retaining integers as exact native pixel values."
+  (if (integerp color) (%checked-mapped-pixel surface color)
+      (map-rgb surface color)))
 (defun get-rect (surface &rest anchor-args)
   "Return the surface rectangle positioned by any pygame Rect anchor keyword.
 Accepts :TOPLEFT (the legacy spelling), :TOP-LEFT, and corresponding compact
@@ -593,22 +610,23 @@ https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE and SDL2/SDL_MUSTLOCK."
 (defun set-at-mapped (surface position value)
   "Write a native packed pixel inside the clip; palette indices are ordinary integers."
   (check-surface surface)
-  (let ((maximum (1- (ash 1 (* 8 (get-bytesize surface))))))
-    (unless (and (integerp value) (<= 0 value maximum))
-      (error 'type-error :datum value :expected-type `(integer 0 ,maximum))))
-  (multiple-value-bind (x y) (pixelisp.internal:pair position)
-    (unless (and (integerp x) (integerp y) (<= 0 x) (< x (width surface)) (<= 0 y) (< y (height surface)))
-      (error "Pixel ~S is outside surface ~S." position (size surface)))
-    (when (px.rect:collide-point (clip-rect surface) position)
-      (lock surface)
-      (unwind-protect (%write-packed-pixel surface x y value) (unlock surface))))
+  (let ((packed (%checked-mapped-pixel surface value)))
+    (multiple-value-bind (x y) (pixelisp.internal:pair position)
+      (unless (and (integerp x) (integerp y) (<= 0 x) (< x (width surface)) (<= 0 y) (< y (height surface)))
+        (error "Pixel ~S is outside surface ~S." position (size surface)))
+      (when (px.rect:collide-point (clip-rect surface) position)
+        (lock surface)
+        (unwind-protect (%write-packed-pixel surface x y packed) (unlock surface)))))
   value)
 (defun set-at (surface position color)
-  "Write one pixel inside the current clip; out-of-clip writes do nothing."
+  "Write a color or native packed integer inside the clip; other writes do nothing."
   (check-surface surface)
-  (multiple-value-bind (x y) (pixelisp.internal:pair position)
-    (when (and (integerp x) (integerp y) (px.rect:collide-point (clip-rect surface) position))
-      (pixelisp.internal:write-surface-pixel surface position color))) color)
+  ;; Validate even when clipping makes this a no-op, before acquiring a lock.
+  (let ((packed (%color-pixel surface color)))
+    (multiple-value-bind (x y) (pixelisp.internal:pair position)
+      (when (and (integerp x) (integerp y) (px.rect:collide-point (clip-rect surface) position))
+        (set-at-mapped surface position packed))))
+  color)
 (defun pixelisp.internal:write-surface-pixel (surface position color)
   "Write a bounded pixel without drawing clipping, for array and buffer copies."
   (check-surface surface)
@@ -695,19 +713,18 @@ https://wiki.libsdl.org/SDL2/SDL_SetSurfaceRLE and SDL2/SDL_MUSTLOCK."
   "Fill a clipped area, optionally applying a RGB/RGBA channel blend effect.
 Pass NIL for RECTANGLE to use the full clip with :SPECIAL-FLAGS. Return damage."
   (check-surface surface)
-  (let ((area (px.rect:clip (clip-rect surface) (if rectangle (pixelisp.internal:as-rect rectangle) (get-rect surface)))))
+  (let ((area (px.rect:clip (clip-rect surface) (if rectangle (pixelisp.internal:as-rect rectangle) (get-rect surface))))
+        (packed (%color-pixel surface color)))
     (multiple-value-bind (operation include-alpha) (%blend-mode special-flags 'fill)
       ;; Decode/validate before writing any pixels, even for an empty clip.
       (when operation
-        (let ((color (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba color))))
+        (let ((color (if (integerp color) (unmap-rgb surface packed)
+                         (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba color)))))
           (return-from fill (%fill-blended surface color area operation include-alpha)))))
-    (multiple-value-bind (r g b a) (pixelisp.internal:rgba color)
-      (pixelisp.internal::with-native-rect (rect area)
-        (when (minusp (pixelisp.internal::%fill-rect
-                       (pixelisp.internal::%ptr (pixelisp.internal:handle surface)) rect
-                       (pixelisp.internal::%map-rgba
-                        (pixelisp.internal::%ptr (sdl2:surface-format (pixelisp.internal:handle surface))) r g b a)))
-          (pixelisp.internal:native-error 'fill)))) area))
+    (pixelisp.internal::with-native-rect (rect area)
+      (when (minusp (pixelisp.internal::%fill-rect
+                     (pixelisp.internal::%ptr (pixelisp.internal:handle surface)) rect packed))
+        (pixelisp.internal:native-error 'fill))) area))
 (defun get-alpha (surface) (check-surface surface) (alpha-value surface))
 (defun set-alpha (surface alpha &key (rle nil rle-p))
   "Set blanket alpha, optionally changing SDL's RLE acceleration hint.

@@ -1,6 +1,79 @@
 (in-package #:pixelisp.examples.tests)
 (in-suite examples)
 
+(test prism-breaker-stick-dead-zone-keeps-resting-input-still
+  (is (= 0 (px.examples::%breaker-stick 0.1d0)))
+  (is (= 0 (px.examples::%breaker-stick -0.1d0)))
+  (is (= 1 (px.examples::%breaker-stick 1d0)))
+  (is (= -1 (px.examples::%breaker-stick -1d0))))
+
+(test prism-breaker-virtual-gamepad-moves-and-serves-through-real-device-state
+  (px:with-init ()
+    (px.controller:init)
+    (let ((index (cffi:foreign-funcall "SDL_JoystickAttachVirtual"
+                                     :int 1 :int 6 :int 21 :int 1 :int))
+          (controller nil) (input nil) (detached nil))
+      (is (not (minusp index)))
+      (unwind-protect
+           (progn
+             (px.joystick:with-joystick (original index)
+               (px.controller:add-mapping
+                (format nil "~A,Pixelisp Breaker Test,leftx:a0,a:b0,dpleft:b13,dpright:b14,"
+                        (px.joystick:get-guid original)))
+               (setf controller (px.controller:from-joystick original)))
+             ;; The original joystick is closed. This independent reference
+             ;; drives virtual input while the game polls its mapped controller.
+             (setf input (px.controller:as-joystick controller))
+             (let ((state (px.examples::%breaker-new-state))
+                   (session (px.examples::make-game-session :mouse-pos '(450 300))))
+               (setf (getf state :last-mouse-x) 450)
+               (cffi:foreign-funcall "SDL_JoystickSetVirtualAxis"
+                                    :pointer (pixelisp.internal:handle input)
+                                    :int 0 :int16 16384 :int)
+               (px.joystick:update)
+               (px.examples::%breaker-step state 0.1d0 session controller)
+               (is (> (getf state :paddle-x) 398))
+               ;; A dpad press must work even with the analog stick at rest.
+               (let ((previous-x (getf state :paddle-x)))
+                 (cffi:foreign-funcall "SDL_JoystickSetVirtualAxis"
+                                      :pointer (pixelisp.internal:handle input)
+                                      :int 0 :int16 0 :int)
+                 (cffi:foreign-funcall "SDL_JoystickSetVirtualButton"
+                                      :pointer (pixelisp.internal:handle input)
+                                      :int 13 :uint8 1 :int)
+                 (px.joystick:update)
+                 (px.examples::%breaker-step state 0.1d0 session controller)
+                 (is (< (getf state :paddle-x) previous-x)))
+               (px.examples::%breaker-event
+                state (px.event:make-event :controller-button-down :which -100 :button 0)
+                session controller)
+               (is (not (getf state :launched)))
+               (px.event:clear nil)
+               (cffi:foreign-funcall "SDL_JoystickSetVirtualButton"
+                                    :pointer (pixelisp.internal:handle input)
+                                    :int 0 :uint8 1 :int)
+               (px.joystick:update)
+               (let ((event (find (px.controller:instance-id controller)
+                                  (px.event:get :types :controller-button-down)
+                                  :key (lambda (event) (px.event:attribute event :which)))))
+                 (is (not (null event)))
+                 (when event (px.examples::%breaker-event state event session controller)))
+               (is (getf state :launched))
+               (is (= 1 (getf state :launches))))
+             ;; Removal is identified by instance ID, even though enumeration
+             ;; indices shift. A different available pad may take over.
+             (let ((id (px.controller:instance-id controller)))
+               (cffi:foreign-funcall "SDL_JoystickDetachVirtual" :int index :int)
+               (setf detached t)
+               (let ((replacement (px.examples::%breaker-controller-event
+                                   controller (px.event:make-event :controller-device-removed :which id))))
+                 (is (not (eq replacement controller)))
+                 (is (pixelisp.internal:resource-disposed-p controller))
+                 (when replacement (px:dispose replacement)))))
+        (when input (px:dispose input))
+        (when controller (px:dispose controller))
+        (unless detached (cffi:foreign-funcall "SDL_JoystickDetachVirtual" :int index :int))))))
+
 (test prism-breaker-shading-broadcasts-scoring-colors-and-releases-the-view
   (px:with-init (:video nil)
     (px:with-resource (brick (px.examples::%breaker-brick-image '(255 88 122)))

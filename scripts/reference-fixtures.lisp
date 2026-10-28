@@ -10,6 +10,51 @@
     (loop for x below (px.surface:width surface)
           collect (px:color-r (px.surface:get-at surface (list x y))))))
 
+(defun fixture-native-packed-drawing-colors ()
+  (loop for depth in '(8 12 15 16 24 32) collect
+    (px.surface:with-surface (surface '(5 4) :depth depth :alpha (= depth 32))
+      (when (= depth 8)
+        (px.surface:set-palette-at surface 5 '(200 120 70))
+        (px.surface:set-palette-at surface 7 '(200 120 70)))
+      (let ((base (if (= depth 8) 5 (px.surface:map-rgb surface '(10 20 30 40))))
+            (ink (if (= depth 8) 7 (px.surface:map-rgb surface '(200 120 70 170)))))
+        (px.surface:fill surface base)
+        (px.surface:set-clip surface '(1 1 3 2))
+        (let ((damage (px.draw:rect surface ink '(0 0 3 3))))
+          (px.draw:line surface ink '(3 1) '(3 2))
+          (px.surface:set-at surface '(0 0) 0)
+          (list (fixture-rect-values damage)
+                (loop for y below 4 append
+                  (loop for x below 5 collect
+                    (px.surface:get-at-mapped surface (list x y))))))))))
+
+(defun fixture-freetype-dpi-scaling ()
+  (let ((original (px.freetype:get-default-resolution)))
+    (unwind-protect
+         (progn
+           (px.freetype:set-default-resolution 96)
+           (px:with-resource (default (px.freetype:make-font nil 16))
+             (px.freetype:set-default-resolution 144)
+             (px:with-resource (other (px.freetype:make-font nil 16))
+               (px.freetype:set-default-resolution)
+               (px:with-resource
+                   (bitmap (px.freetype:make-font
+                             (asdf:system-relative-pathname "pixelisp" "tests/fixtures/tiny-mono.bdf")
+                             4 :resolution 144))
+                 (list (list (px.freetype:resolution default) (px.freetype:resolution other)
+                             (px.freetype:get-default-resolution))
+                       (loop for dpi in '(72 96 144) collect
+                         (px:with-resource (font (px.freetype:make-font nil 16.25 :resolution dpi))
+                           (list (px.freetype:resolution font)
+                                 (round (px.freetype:get-sized-height font))
+                                 (round (px.freetype:get-sized-ascender font))
+                                 (round (px.freetype:get-sized-descender font))
+                                 (mapcar #'round (first (px.freetype:get-metrics font "A")))
+                                 (mapcar #'round (first (px.freetype:get-metrics font "A" :size '(12.5 9.25)))))))
+                       (round (px.freetype:get-sized-height bitmap))
+                       (px.freetype:get-sized-glyph-height bitmap))))))
+      (px.freetype:set-default-resolution original))))
+
 (defun fixture-pixelarray-assignment-and-broadcasting ()
   (px.surface:with-surface (target '(4 3) :alpha t)
     (px.surface:with-surface (column '(1 3) :alpha t)
@@ -54,6 +99,64 @@
                 (list colors (loop for x below 2 collect (px.pixelarray:ref target-pixels x 0))
                       (px.color:to-list (px.surface:get-at indexed-target '(0 0))))))))))))
 
+(defun fixture-pixelarray-line-views-and-metadata ()
+  (px.surface:with-surface
+      (surface '(4 3) :alpha t :masks '(#xff #xff00 #xff0000 #xff000000))
+    (px.pixelarray:with-pixel-array (pixels surface)
+      (dotimes (y 3)
+        (dotimes (x 4)
+          (setf (px.pixelarray:ref pixels x y)
+                (list (1+ (+ x (* y 4))) 0 0 255))))
+      (px.buffer:with-view (last-row (px.pixelarray:row pixels -1))
+        (px.buffer:with-view (middle-column (px.pixelarray:column pixels 2))
+          (setf (px.pixelarray:ref last-row 1) '(90 0 0 255)
+                (px.pixelarray:ref middle-column 0) '(80 0 0 255))
+          (px.buffer:with-view (transposed (px.pixelarray:transpose middle-column))
+            (px:with-resource (copied (px.pixelarray:make-surface last-row))
+              (list (px.pixelarray:shape last-row)
+                    (px.pixelarray:strides last-row)
+                    (px.pixelarray:ndim last-row)
+                    (px.pixelarray:itemsize last-row)
+                    (px.pixelarray:shape middle-column)
+                    (px.pixelarray:strides middle-column)
+                    (px.pixelarray:ndim middle-column)
+                    (px.pixelarray:itemsize middle-column)
+                    (px.pixelarray:shape transposed)
+                    (px.pixelarray:strides transposed)
+                    (px.surface:size copied)
+                    (px.surface:get-bitsize copied)
+                    (fixture-red-values copied)
+                    (fixture-red-values surface)
+                    (if (and (eq surface (px.pixelarray:surface last-row))
+                             (eq surface (px.pixelarray:surface middle-column)))
+                        1 0)))))))))
+
+(defun fixture-pixelarray-line-assignment-and-broadcasting ()
+  (px.surface:with-surface (surface '(4 4))
+    (px.pixelarray:with-pixel-array (pixels surface)
+      (dotimes (y 4)
+        (dotimes (x 4)
+          (setf (px.pixelarray:ref pixels x y) (1+ (+ x (* y 4))))))
+      (px.buffer:with-view (first-row (px.pixelarray:row pixels 0))
+        (px.buffer:with-view (reversed
+                               (px.buffer:slice first-row '(3) '(4) '(-1)))
+          (px.pixelarray:assign first-row reversed))
+        (let ((after-reverse (loop for y below 4 collect
+                              (loop for x below 4 collect (px.pixelarray:ref pixels x y)))))
+          (px.pixelarray:assign pixels first-row)
+          (let ((after-broadcast (loop for y below 4 collect
+                                  (loop for x below 4 collect (px.pixelarray:ref pixels x y)))))
+            (px.buffer:with-view (middle-column (px.pixelarray:column pixels 2))
+              (loop for y below 4 for value in '(10 20 30 40)
+                    do (setf (px.pixelarray:ref middle-column y) value))
+              (px.buffer:with-view (transposed (px.pixelarray:transpose middle-column))
+                (px.pixelarray:assign pixels transposed)
+                (list after-reverse after-broadcast
+                      (px.pixelarray:shape transposed)
+                      (px.pixelarray:strides transposed)
+                      (loop for y below 4 collect
+                        (loop for x below 4 collect (px.pixelarray:ref pixels x y))))))))))))
+
 (defun fixture-freetype-memory-sources-and-collections ()
   (let* ((path (px.freetype:get-default-font))
          (octets (with-open-file (stream path :element-type '(unsigned-byte 8))
@@ -94,6 +197,33 @@
                                  0)
                              (px:error () 1)))))
               (when streamed (px:dispose streamed)))))))))
+
+(defun fixture-controller-bridges-and-mapping-edits ()
+  (px.controller:init)
+  (let ((index (cffi:foreign-funcall "SDL_JoystickAttachVirtual"
+                                   :int 1 :int 6 :int 21 :int 1 :int)))
+    (when (minusp index) (error "Unable to attach the reference virtual controller"))
+    (unwind-protect
+         (px.joystick:with-joystick (joystick index)
+           (px.controller:add-mapping
+            (format nil "~A,Pixelisp Reference Pad,a:b0,b:b1,leftx:a0,platform:Linux,"
+                    (px.joystick:get-guid joystick)))
+           (px:with-resource (controller (px.controller:from-joystick joystick))
+             (px:with-resource (duplicate (px.controller:as-joystick controller))
+               (let* ((bindings (px.controller:get-mapping controller))
+                      (original-a (gethash "a" bindings)))
+                 (setf (gethash "a" bindings) "b1")
+                 (let ((result (px.controller:set-mapping controller bindings)))
+                   (cffi:foreign-funcall "SDL_JoystickSetVirtualButton"
+                                        :pointer (pixelisp.internal:handle joystick)
+                                        :int 1 :uint8 1 :int)
+                   (px.joystick:update)
+                   (list (if (= (px.joystick:instance-id joystick)
+                                (px.joystick:instance-id duplicate)) 1 0)
+                         (if (string= original-a "b0") 1 0) result
+                         (if (string= "b1" (gethash "a" (px.controller:get-mapping controller))) 1 0)
+                         (if (px.controller:get-button controller :a) 1 0)))))))
+      (cffi:foreign-funcall "SDL_JoystickDetachVirtual" :int index :int))))
 
 (defun fixture-zero-radius-circle ()
   (px.surface:with-surface (surface '(3 3) :alpha t)
@@ -1082,7 +1212,11 @@
              (fixture-indexed-nearest-transforms) (fixture-indexed-image-decoding)
              (fixture-pixelarray-assignment-and-broadcasting)
              (fixture-pixelarray-native-copy-formats)
-             (fixture-freetype-memory-sources-and-collections))))))))
+             (fixture-pixelarray-line-views-and-metadata)
+             (fixture-pixelarray-line-assignment-and-broadcasting)
+             (fixture-controller-bridges-and-mapping-edits)
+             (fixture-freetype-memory-sources-and-collections)
+             (fixture-native-packed-drawing-colors) (fixture-freetype-dpi-scaling))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

@@ -22,6 +22,20 @@ rectangle enclosing the pixels it changed (an empty rectangle when clipping
 removes all pixels). Drawing honors the surface clip and unlocks the surface
 even if drawing signals an error.
 
+Integer colors are native destination pixels, as returned by
+`px.surface:map-rgb`; on indexed surfaces they select exact palette entries.
+They are validated before drawing. Full-coverage samples retain those packed
+bits, including duplicate palette indices; partial antialiased samples blend
+decoded channels. Alpha is written directly on ordinary samples. To use a
+canonical `#xRRGGBBAA` value, construct a Color with `px:make-color` first.
+
+```lisp
+(px.surface:with-surface (badge '(32 32) :depth 8)
+  (px.surface:set-palette-at badge 7 '(240 170 60))
+  (px.draw:circle badge 7 '(16 16) 12) ; Store index 7, without color lookup.
+  (px.surface:set-palette-at badge 7 '(255 80 60)))
+```
+
 `rect` accepts a common `:border-radius` plus independent
 `:border-top-left-radius`, `:border-top-right-radius`,
 `:border-bottom-left-radius`, and `:border-bottom-right-radius` overrides.
@@ -48,6 +62,8 @@ differences from pygame.
 precede the color, for example `(px.gfxdraw:box surface x1 y1 x2 y2 color)`.
 Its `filled-*`, `aa*`, polygon, arc, pie, and Bezier helpers use the same CPU
 rasterizers. `textured-polygon` fills an area from a repeating texture.
+These shared helpers also accept mapped integer colors, a Lisp extension to
+pygame.gfxdraw's documented RGB(A) color forms.
 
 ## Transforms and pixel operations
 
