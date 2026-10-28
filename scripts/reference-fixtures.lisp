@@ -10,6 +10,60 @@
     (loop for x below (px.surface:width surface)
           collect (px:color-r (px.surface:get-at surface (list x y))))))
 
+(defun fixture-temporary-sprite-group (sprite)
+  ;; The group is held strongly while observing its initial membership. Only
+  ;; its weak pointer escapes this frame, so a later GC can test reverse links.
+  (let ((group (px.sprite:make-group sprite)))
+    (values (trivial-garbage:make-weak-pointer group)
+            (if (px.sprite:alive-p sprite) 1 0) (length (px.sprite:groups sprite)))))
+
+(defun fixture-weak-sprite-group-lifetimes ()
+  (let ((weak (px.sprite:make-weak-dirty-sprite)) (ordinary (px.sprite:make-sprite)))
+    (multiple-value-bind (reference alive count) (fixture-temporary-sprite-group weak)
+      (multiple-value-bind (normal-reference normal-alive) (fixture-temporary-sprite-group ordinary)
+        (sb-ext:gc :full t)
+        (let ((result (list (list alive count normal-alive)
+                            (if (trivial-garbage:weak-pointer-value reference) 0 1)
+                            (if (px.sprite:alive-p weak) 1 0) (length (px.sprite:groups weak))
+                            (if (trivial-garbage:weak-pointer-value normal-reference) 1 0)
+                            (if (px.sprite:alive-p ordinary) 1 0) (px.sprite:dirty weak))))
+          (px.sprite:kill ordinary)
+          (append result (list (if (px.sprite:alive-p ordinary) 1 0))))))))
+
+(defun fixture-freetype-padded-cells-and-colors ()
+  (px:with-resource (font (px.freetype:make-font nil 24))
+    (setf (px.freetype:pad font) t)
+    (let ((cells (loop for vertical in '(nil t) collect
+                  (progn
+                    (setf (px.freetype:vertical font) vertical)
+                    (loop for text in '("A" "g" "Ag" " ") collect
+                      (px:with-resource (surface (px.freetype:render font text "white"))
+                        (px.surface:size surface)))))))
+      (setf (px.freetype:vertical font) nil
+            (px.freetype:fgcolor font) '(200 30 40)
+            (px.freetype:bgcolor font) '(10 20 30))
+      (px:with-resource (surface (px.freetype:render font "A"))
+        (px:with-resource (override (px.freetype:render font "A" "blue" '(20 40 60)))
+          (list cells (px.color:to-list (px.freetype:fgcolor font))
+                (px.color:to-list (px.freetype:bgcolor font))
+                (px.color:to-list (px.surface:get-at surface '(0 0)))
+                (px.color:to-list (px.surface:get-at override '(0 0)))
+                (nth-value 1 (px.freetype:render-raw font "A"))))))))
+
+(defun fixture-ordered-system-font-matching ()
+  (let* ((px.font::*font-inventory* (make-hash-table :test 'equal))
+         (px.font::*font-aliases* (make-hash-table :test 'equal))
+         (px.font::*font-inventory-ready-p* t)
+         (paths '(nil "/fonts/R.ttf" "/fonts/B.ttf" "/fonts/I.ttf" "/fonts/Other.otf")))
+    (loop for style in '("Regular" "Bold" "Italic") for path in (subseq paths 1 4)
+          do (px.font::%font-entry px.font::*font-inventory* "Alpha" style path))
+    (px.font::%font-entry px.font::*font-inventory* "Beta" "Regular" (fifth paths))
+    (setf (gethash "alias" px.font::*font-aliases*) (gethash "alpha" px.font::*font-inventory*))
+    (loop for (names bold italic) in '(("missing,Alpha" nil nil) (("missing" "alias") t nil)
+                                       (#("missing" "beta") nil nil) ("a-l p h a" nil t)
+                                       ("alpha" t t) ("unknown" nil nil))
+          collect (position (px.font:match-font names :bold bold :italic italic) paths :test #'equal))))
+
 (defun fixture-native-packed-drawing-colors ()
   (loop for depth in '(8 12 15 16 24 32) collect
     (px.surface:with-surface (surface '(5 4) :depth depth :alpha (= depth 32))
@@ -1216,7 +1270,9 @@
              (fixture-pixelarray-line-assignment-and-broadcasting)
              (fixture-controller-bridges-and-mapping-edits)
              (fixture-freetype-memory-sources-and-collections)
-             (fixture-native-packed-drawing-colors) (fixture-freetype-dpi-scaling))))))))
+             (fixture-native-packed-drawing-colors) (fixture-freetype-dpi-scaling)
+             (fixture-weak-sprite-group-lifetimes) (fixture-freetype-padded-cells-and-colors)
+             (fixture-ordered-system-font-matching))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

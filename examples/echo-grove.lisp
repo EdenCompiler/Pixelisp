@@ -74,6 +74,17 @@
 (defparameter +echo-pad-rects+ '((100 168 334 132) (466 168 334 132)
                                 (100 326 334 132) (466 326 334 132)))
 
+(defun %echo-pad-sprites (atlas)
+  "Keep reusable pad art in sprites whose reverse group links are weak."
+  (loop for rect in +echo-pad-rects+ for column from 0
+        collect (px.sprite:make-weak-sprite
+                 :image atlas :rect (apply #'px:make-rect rect)
+                 :source-rect (list (* column 334) 0 334 132))))
+
+(defun %echo-pad-group (pads)
+  "Build the ordered display group for the current Echo Grove scene."
+  (apply #'px.sprite:make-ordered-group pads))
+
 (defun %echo-event (state event session)
   (let ((pad
           (case (px.event:type event)
@@ -119,16 +130,18 @@
   "Build four pad sprites; source rectangles select their current atlas frame."
   (let* ((colors '((67 184 248) (76 219 163) (255 146 99) (182 138 255)))
          (atlas (%echo-pad-atlas colors))
-         (pads (loop for rect in +echo-pad-rects+ for column from 0
-                     collect (px.sprite:make-sprite
-                              :image atlas :rect (apply #'px:make-rect rect)
-                              :source-rect (list (* column 334) 0 334 132))))
-         (group (apply #'px.sprite:make-ordered-group pads)))
+         (pads (%echo-pad-sprites atlas))
+         (group (%echo-pad-group pads)))
     (make-mini-game
      :id :echo-grove :title "ECHO GROVE"
      :instructions "1–4 / arrow keys / click pads · Repeat six melodies"
      :state (%echo-new-state session) :on-event #'%echo-event :on-step #'%echo-step
-     :on-reset #'%echo-new-state :snapshot #'%echo-snapshot
+     ;; Keep reusable pads and their atlas across restarts, but let the old
+     ;; scene group go. Weak reverse membership means pads do not retain it.
+     :on-reset (lambda (current-session)
+                 (setf group (%echo-pad-group pads))
+                 (%echo-new-state current-session))
+     :snapshot #'%echo-snapshot
      :on-draw
      (lambda (state current-session)
        (px.surface:fill (session-screen current-session) '(11 22 34))

@@ -225,6 +225,21 @@ position `rect`, optional collision `mask` and `radius`, visibility, dirty
 state, and layer. `make-sprite` sets the rectangle from the image when no rect
 is supplied. Override `px.sprite:update` to add game behavior.
 
+`make-weak-sprite` creates a sprite whose references to groups are weak. Groups
+still retain their member sprites, so keeping a group alive keeps its sprites
+alive. When the last external reference to a group goes away, it can be
+collected; the sprite's `groups` and `alive-p` queries then discard that stale
+membership. `kill`, `add`, and `remove` work the same way as for ordinary
+sprites. `make-weak-dirty-sprite` combines weak membership with the same dirty
+state and layered-dirty drawing behavior as `dirty-sprite`.
+
+```lisp
+(let ((actor (px.sprite:make-weak-sprite)))
+  ;; Keep the group in a variable while it should own and draw ACTOR.
+  (let ((actors (px.sprite:make-group actor)))
+    (px.sprite:draw actors screen)))
+```
+
 Groups keep membership in insertion order. `ordered-group` is provided as an
 explicit ordered variant; layered groups draw in ascending layer order, and
 `change-layer` changes that sprite's order in that group only. Adding a sprite

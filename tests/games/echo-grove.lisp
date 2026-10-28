@@ -38,7 +38,38 @@
           (is (equal '(255 90 60 255) (px.color:to-list (px.surface:get-at screen '(110 328)))))
           (setf (px.examples::%echo-state-lives state) 3)
           (draw-game)
-          (is (= 245 (red-at '(110 328)))))))))
+          (is (= 245 (red-at '(110 328))))
+          ;; Restart replaces the scene group while retaining the same pads
+          ;; and atlas. The callback returns fresh game state for the runner.
+          (setf state (funcall (px.examples::mini-game-on-reset game) session))
+          (is (= 1 (px.examples::%echo-state-round state)))
+          (is (eq :lead-in (px.examples::%echo-state-phase state)))
+          (draw-game)
+          (is (= 21 (red-at '(110 180))))
+          (is (= 82 (red-at '(110 338)))))))))
+
+(test echo-grove-reusable-weak-pads-can-move-between-scene-groups
+  (px:with-init (:video nil)
+    (px:with-resource (atlas (px.examples::%echo-pad-atlas
+                               '((67 184 248) (76 219 163) (255 146 99) (182 138 255))))
+      (let* ((pads (px.examples::%echo-pad-sprites atlas))
+             (old-group (px.examples::%echo-pad-group pads)))
+        (is (= 4 (px.sprite:group-size old-group)))
+        ;; Repeated reverse-membership reads must leave weak pointers stored,
+        ;; so later reads and a new group's construction still work.
+        (dotimes (index 3)
+          (declare (ignore index))
+          (is (member old-group (px.sprite:groups (first pads)) :test #'eq))
+          (is (px.sprite:alive-p (first pads))))
+        (let* ((new-group (px.examples::%echo-pad-group pads))
+               (copy (px.sprite:copy-group new-group)))
+          (is (= 4 (px.sprite:group-size new-group)))
+          (is (= 4 (px.sprite:group-size copy)))
+          (is (member old-group (px.sprite:groups (first pads)) :test #'eq))
+          (is (member new-group (px.sprite:groups (first pads)) :test #'eq))
+          (px.sprite:remove old-group (first pads))
+          (is (not (member old-group (px.sprite:groups (first pads)) :test #'eq)))
+          (is (member new-group (px.sprite:groups (first pads)) :test #'eq)))))))
 
 (defun %echo-wait-for-input (state session)
   ;; Six notes at most: a bounded simulation protects against a stuck cue state.

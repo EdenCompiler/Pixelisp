@@ -81,6 +81,33 @@ sans font as a fallback. `px.font:font` accepts the same sources;
 `px.font:sys-font` resolves a family name through fontconfig and accepts `:bold`
 and `:italic`. `px.sysfont` re-exports the system-font lookup functions.
 
+`get-fonts` returns fresh, sorted, lowercase alphanumeric family names, such as
+`"dejavusans"`. Discovery reads OpenType paths through fontconfig once, on first
+use; loading Pixelisp does not scan fonts or open font handles. `match-font`
+accepts a comma-separated string, list, or vector of fallback names, searched
+in order. Spaces and punctuation are ignored when matching. Common pygame
+aliases and generic `"sans-serif"`, `"serif"`, and `"monospace"` names resolve
+only when a corresponding family is installed.
+
+Unknown names and NIL return NIL from `match-font`, instead of an unrelated
+fontconfig fallback. Missing fontconfig produces an empty inventory.
+`sys-font` handles either case by loading the bundled font. Requested styles
+prefer an installed face; synthetic bold/italic is applied only for a requested
+style missing from that face. Direct FreeType and ftfont share this lookup and
+use strong/oblique styling for missing variants. Discovery results are cached
+for the process; new font installations are picked up on a fresh run.
+For partially available bold/italic combinations, Pixelisp prefers a face that
+already supplies a requested component; pygame's SysFont can choose a plain
+face and synthesize both. Unknown/NIL matching and returned Lisp strings follow
+the rules above, without Python byte-string or iterable protocols.
+
+```lisp
+(px:with-resource (font (px.font:sys-font #("Game UI" "DejaVu Sans" "sans-serif")
+                                        20 :bold t))
+  (px:with-resource (label (px.font:render font "Ready" t "white"))
+    (px.surface:blit screen label '(20 20))))
+```
+
 Binary streams are consumed from their current position to EOF and remain
 open. Encoded inputs are copied into native-owned storage because SDL_ttf may
 read glyph data after construction. You may change the original vector or
@@ -321,6 +348,32 @@ module default. DPI must be an unsigned 32-bit integer.
 `init :resolution DPI` also sets the module default; a plain `init` leaves it
 unchanged. This affects direct FreeType/ftfont rendering, independently of
 SDL_ttf fonts.
+
+`pad` is a writable boolean, initially NIL. Enabling it expands text bounds to
+include the full ascent/descent plus one baseline row for horizontal text, or
+the maximum advance cell for vertical text. It changes allocation and top-left
+placement, while glyph coordinates relative to the baseline remain unchanged.
+All render paths share those bounds, including raw arrays. Padded rotation
+signals `unsupported-feature` before writing to a destination. Empty output
+still has at least one pixel on each axis, following Pixelisp Surface rules.
+
+`fgcolor` and `bgcolor` are writable default colors, copied both on input and
+output. The initial foreground remains opaque white for compatibility with
+earlier Pixelisp versions; pygame starts with black. The initial background is
+NIL (transparent). `render` and `render-to` use those defaults when colors are
+omitted; a NIL foreground uses the saved foreground. An explicit NIL background
+overrides a saved background with transparency, a Lisp adaptation to pygame's
+NIL/None handling. Color overrides do not change the properties. Raw coverage
+masks ignore both display-color properties.
+
+```lisp
+(setf (px.freetype:pad font) t
+      (px.freetype:fgcolor font) "gold"
+      (px.freetype:bgcolor font) '(10 20 30))
+(px.freetype:render-to font screen '(20 60) "Round 2")
+;; Use the saved foreground with a transparent background for this draw.
+(px.freetype:render-to font screen '(20 100) "Ready" nil nil)
+```
 
 ```lisp
 (px:with-resource (font (px.freetype:make-font nil 12 :resolution 144))

@@ -10,8 +10,10 @@
   (:nicknames #:px.sprite)
   (:use #:cl)
   (:shadow #:remove #:clear)
-  (:export #:sprite #:dirty-sprite #:group #:group-single #:ordered-group #:layered-group #:layered-dirty-group
-           #:make-sprite #:make-dirty-sprite #:make-group #:make-group-single #:single-sprite #:make-ordered-group
+  (:export #:sprite #:dirty-sprite #:weak-sprite #:weak-dirty-sprite
+           #:group #:group-single #:ordered-group #:layered-group #:layered-dirty-group
+           #:make-sprite #:make-dirty-sprite #:make-weak-sprite #:make-weak-dirty-sprite
+           #:make-group #:make-group-single #:single-sprite #:make-ordered-group
            #:render-updates-group #:make-render-updates-group #:source-rect
            #:make-layered-group #:make-layered-dirty-group #:image #:rect #:mask
            #:layer #:visible-p #:dirty #:blend-flags #:radius #:groups #:alive-p #:kill
@@ -39,6 +41,8 @@
    (blend-flags :initarg :blend-flags :initform nil :accessor blend-flags)
    (%source-rect :initarg :source-rect :initform nil :accessor %source-rect)))
 (defclass dirty-sprite (sprite) ())
+(defclass weak-sprite (sprite) ())
+(defclass weak-dirty-sprite (weak-sprite dirty-sprite) ())
 (defclass group ()
   ((sprites :initform nil :accessor %sprites)
    (drawn :initform (make-hash-table :test #'eq) :accessor %drawn)
@@ -84,14 +88,19 @@
   "Return the sprite's top-left destination; source crops keep this origin."
   (let ((position (rect sprite)))
     (list (pixelisp:rect-x position) (pixelisp:rect-y position))))
-(defun make-sprite (&key image rect source-rect (layer 0) (visible t) (dirty 1) mask radius blend-flags)
+(defun %make-sprite-instance (class &key image rect source-rect (layer 0) (visible t) (dirty 1) mask radius blend-flags)
   "Construct a Sprite. When IMAGE is provided, RECT defaults to its image rectangle."
-  (let ((sprite (make-instance 'sprite :image image :rect (or rect (if image (%surface-call "GET-RECT" image)
-                                                                      (pixelisp:make-rect 0 0 0 0)))
+  (let ((sprite (make-instance class :image image :rect (or rect (if image (%surface-call "GET-RECT" image)
+                                                                    (pixelisp:make-rect 0 0 0 0)))
                                :layer layer :visible visible :dirty dirty :mask mask :radius radius
                                :blend-flags blend-flags)))
     (setf (source-rect sprite) source-rect)
     sprite))
+(defun make-sprite (&key image rect source-rect (layer 0) (visible t) (dirty 1) mask radius blend-flags)
+  "Construct a Sprite. When IMAGE is provided, RECT defaults to its image rectangle."
+  (%make-sprite-instance 'sprite :image image :rect rect :source-rect source-rect
+                         :layer layer :visible visible :dirty dirty :mask mask
+                         :radius radius :blend-flags blend-flags))
 (defmethod (setf visible-p) :after (value (sprite sprite))
   (declare (ignore value))
   (setf (dirty sprite) (max 1 (dirty sprite))))
@@ -103,9 +112,44 @@
   (setf (dirty sprite) (max 1 (dirty sprite))))
 (defun make-dirty-sprite (&rest arguments)
   "Construct a dirty-sprite using the same keyword arguments as MAKE-SPRITE."
-  (change-class (apply #'make-sprite arguments) 'dirty-sprite))
-(defun groups (sprite) (copy-list (%groups sprite)))
-(defun alive-p (sprite) "Return true when SPRITE belongs to at least one group." (not (null (%groups sprite))))
+  (apply #'%make-sprite-instance 'dirty-sprite arguments))
+(defun make-weak-sprite (&rest arguments)
+  "Construct a Sprite whose references to member groups are weak."
+  (apply #'%make-sprite-instance 'weak-sprite arguments))
+(defun make-weak-dirty-sprite (&rest arguments)
+  "Construct a weak Sprite with dirty-rendering attributes."
+  (apply #'%make-sprite-instance 'weak-dirty-sprite arguments))
+(defun %weak-sprite-p (sprite) (typep sprite 'weak-sprite))
+(defun %live-groups (sprite)
+  "Return live member groups, pruning dead weak references in place."
+  (if (%weak-sprite-p sprite)
+      (let ((references nil) (groups nil))
+        (dolist (reference (%groups sprite))
+          (let ((group (trivial-garbage:weak-pointer-value reference)))
+            (when group
+              ;; Keep weak-pointer objects in the slot. Returning GROUPs is
+              ;; only for this read; storing them would make the next call
+              ;; mistake strong group objects for weak pointers.
+              (push reference references)
+              (push group groups))))
+        (setf (%groups sprite) (nreverse references))
+        (nreverse groups))
+      (%groups sprite)))
+(defun %record-group (sprite group)
+  (if (%weak-sprite-p sprite)
+      (unless (member group (%live-groups sprite) :test #'eq)
+        (push (trivial-garbage:make-weak-pointer group) (%groups sprite)))
+      (pushnew group (%groups sprite) :test #'eq)))
+(defun %forget-group (sprite group)
+  (if (%weak-sprite-p sprite)
+      (setf (%groups sprite)
+            (delete-if (lambda (reference)
+                         (let ((member-group (trivial-garbage:weak-pointer-value reference)))
+                           (or (null member-group) (eq member-group group))))
+                       (%groups sprite)))
+      (setf (%groups sprite) (delete group (%groups sprite) :test #'eq))))
+(defun groups (sprite) (copy-list (%live-groups sprite)))
+(defun alive-p (sprite) "Return true when SPRITE belongs to at least one group." (not (null (%live-groups sprite))))
 (defgeneric add (group &rest sprites)
   (:documentation "Add sprites to a group, or add a sprite to the supplied groups."))
 (defgeneric remove (group &rest sprites)
@@ -128,7 +172,7 @@
   (dolist (sprite (%flatten objects))
     (unless (member sprite (%sprites group) :test #'eq)
       (setf (%sprites group) (append (%sprites group) (list sprite)))
-      (push group (%groups sprite))
+      (%record-group sprite group)
       (setf (gethash sprite (%layers group)) (layer sprite)
             (dirty sprite) (max 1 (dirty sprite))))) group)
 (defmethod add ((group group-single) &rest objects)
@@ -145,8 +189,8 @@
     (when (member sprite (%sprites group) :test #'eq)
       (let ((old (gethash sprite (%drawn group))))
         (when old (push old (%pending group))))
-      (setf (%sprites group) (delete sprite (%sprites group) :test #'eq)
-            (%groups sprite) (delete group (%groups sprite) :test #'eq))
+      (setf (%sprites group) (delete sprite (%sprites group) :test #'eq))
+      (%forget-group sprite group)
       (remhash sprite (%drawn group)) (remhash sprite (%layers group)))) group)
 (defmethod add ((sprite sprite) &rest groups)
   (dolist (group groups) (add group sprite)) sprite)

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add WeakSprite/WeakDirtySprite equivalents: groups retain sprites while
+  reusable sprites hold weak reverse memberships. Echo Grove replaces its
+  display group on restart without retaining retired scene groups.
+- Discover normalized installed font families lazily through fontconfig, accept
+  ordered string/list/vector fallback names and common aliases, and return NIL
+  for unmatched names. SysFont variants synthesize only missing requested styles.
+- Add FreeType padded text cells and copied foreground/background defaults,
+  keeping baseline ink and raw masks stable. Explicit NIL backgrounds override
+  saved colors; unsupported padded rotation fails before drawing.
 - Add direct FreeType point sizes with configurable module/default and per-font
   DPI, read-only resolution queries, fractional sizes and DPI-aware bitmap
   strike selection, style strength and underline metrics. The default remains

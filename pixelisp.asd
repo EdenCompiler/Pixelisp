@@ -2,7 +2,7 @@
 (asdf:defsystem "pixelisp/core"
   :description "Native-independent Pixelisp geometry, mathematics, and resource protocols"
   :version "0.1.0" :license "MIT"
-  :depends-on ("bordeaux-threads")
+  :depends-on ("bordeaux-threads" "trivial-garbage")
   :serial t
   :components ((:file "src/packages") (:file "src/core") (:file "src/rect-tools")
                (:file "src/color-names") (:file "src/colors") (:file "src/math") (:file "src/vector-access")
@@ -19,7 +19,7 @@
                (:file "src/graphics") (:file "src/mask-surface")
                (:file "src/arrays") (:file "src/pixelarray-assignment")
                (:file "src/surface-views") (:file "src/media")
-               (:file "src/font-memory") (:file "src/sndarray")
+               (:file "src/font-memory") (:file "src/sysfont") (:file "src/sndarray")
                (:file "src/devices") (:file "src/device-info") (:file "src/controller-tools")
                (:file "src/threads") (:file "src/sdl2-ext")
                (:file "src/image-output")
@@ -75,12 +75,14 @@
                (:file "tests/mouse-events")
                (:file "tests/controller-events")
                (:file "tests/graphics") (:file "tests/rounded-rect") (:file "tests/draw-colors")
+               (:file "tests/weak-sprites")
                (:file "tests/sprite-extra") (:file "tests/sprite-repaint")
                (:file "tests/sprite-source") (:file "tests/render-updates") (:file "tests/laplacian")
                (:file "tests/media") (:file "tests/freetype-arrays")
                (:file "tests/freetype-styles") (:file "tests/freetype-info") (:file "tests/freetype-layout")
                (:file "tests/freetype-size") (:file "tests/freetype-reuse")
                (:file "tests/freetype-resolution")
+               (:file "tests/freetype-padding") (:file "tests/sysfont")
                (:file "tests/freetype-memory")
                (:static-file "tests/fixtures/tiny-mono.bdf")
                (:file "tests/image-memory") (:file "tests/image-export") (:file "tests/font-script")

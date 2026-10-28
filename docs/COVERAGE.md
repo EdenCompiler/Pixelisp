@@ -30,9 +30,9 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `time` | `px.time` | Clocks, frame caps, elapsed/raw time, FPS, delay, pump-delivered timers |
 | `math`, `Vector2`, `Vector3` | `px.math` | Vector arithmetic, indexed components and swizzles with validated writes, updates, length scaling, geometry, scalar/vector interpolation, decimal rounding, bounded movement, degree/radian rotations, scalar clamp and polar/spherical conversion |
 | `mask`, `Mask` | `px.mask` | Bit masks, positioned rectangle anchors including empty masks, alpha/key/threshold construction, overlap, composition/convolution, components, outlines, colored/source-plane painting |
-| `sprite` | `px.sprite` | CLOS sprites, source-image crops, single/ordered/RenderUpdates/layered/dirty groups, membership/update, old/new damage tracking and retry preservation, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
-| `font`, `sysfont` | `px.font`, `px.sysfont` | Fonts loaded from paths, encoded octets or binary streams with retained native storage; UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, fontconfig discovery, bundled fallback font |
-| `freetype`, `_freetype` | `px.freetype` | Path/octet/stream fonts, collection face selection and source metadata, point sizes with per-font/default DPI, direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, baseline placement, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
+| `sprite` | `px.sprite` | CLOS sprites including weak reverse memberships and weak dirty sprites, source-image crops, single/ordered/RenderUpdates/layered/dirty groups, membership/update, old/new damage tracking and retry preservation, blend flags, positive/negative draw-order indexing, group clips/repaint invalidation and collision helpers |
+| `font`, `sysfont` | `px.font`, `px.sysfont` | Fonts loaded from paths, encoded octets or binary streams with retained native storage; UTF-8 SDL_ttf text, metrics/styles, per-font ISO 15924 shaping script when SDL_ttf 2.20+ has HarfBuzz, normalized fontconfig inventory, ordered fallback names, style-aware aliases and bundled fallback font |
+| `freetype`, `_freetype` | `px.freetype` | Path/octet/stream fonts, collection face selection and source metadata, point sizes with per-font/default DPI, direct glyph rasterization, retained text, embedded-bitmap control, independent size axes, kerning, face/strike metrics, padded baseline cells and copied default colors, outline rotation, vertical layout, strong/oblique/wide/underline styles with per-call overrides, inverted coverage masks, raw rendering to integer arrays and live byte-plane views |
 | `ftfont` | `px.ftfont` | SDL_ttf-shaped facade backed by optional direct FreeType module |
 | `mixer`, `mixer_music`, `mixer.music` | `px.mixer`, `px.mixer.music` | Output-device selection and allowed-setting negotiation; sound/music decoding from paths, encoded memory and binary streams; channels, volume/panning, fades/queues, streamed music with retained native asset storage, playback controls and pump-delivered completion events |
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
@@ -104,6 +104,17 @@ The exported Lisp symbols and module API guides describe the actual interface.
   in draw order to preserve overlap. They can report broader damage than
   pygame's optimized dirty rectangles; returned damage is clipped to the
   effective target and group clip.
+  WeakSprite variants weaken only the sprite's reverse group memberships;
+  groups still retain their sprites and sprite images retain normal ownership.
+  Dead memberships are pruned on reads; collection timing follows the Lisp GC.
+- Direct FreeType supports padded cells and saved rendering colors. Its default
+  foreground remains white; pygame starts with black. Explicit NIL backgrounds
+  request transparency even with a saved background. Raw masks ignore the saved
+  display colors. Padded rotation is unavailable, matching pygame's restriction.
+  Empty text uses nonempty Pixelisp surfaces rather than zero-width images.
+  System-font matching uses normalized installed OpenType family names, common
+  aliases and ordered fallbacks; unmatched names return NIL. Inventory is lazy
+  and cached, and constructor fallbacks use the bundled font.
 - Laplacian edges use deterministic opaque white padding and snapshotted
   inputs. The local pygame 2.6.1 build produced varying corner pixels, so its
   differential fixture compares interior responses; Lisp tests verify the
@@ -232,6 +243,13 @@ invalid values and exceptional unlocking. Echo Grove tests distinguish pad
 and warning pixels even with duplicate initial palette colors. FreeType DPI
 tests cover default snapshots, fractional/independent axes, styles, memory
 sources, scoped size overrides, scaled bitmap strikes and failed setup cleanup.
+Weak-sprite tests cover repeated reads, group copies/replacement, dirty draws,
+strong group-to-sprite ownership and bounded SBCL collection of abandoned
+groups. Echo Grove reuses its pad pool across scene-group replacements on
+restart. System-font tests use a controlled inventory plus real bundled-font
+rendering to verify fallback order, copied results, variant selection and failed
+style setup cleanup. Text tests verify padded baseline masks, raw/surface target
+agreement, color ownership, override behavior and validation before target writes.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
 The retained-text fixture compares immediate reuse. The local pygame build's

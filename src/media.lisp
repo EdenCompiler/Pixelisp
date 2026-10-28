@@ -277,13 +277,8 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
 (defun %fontconfig (program arguments)
   (ignore-errors (string-trim '(#\Space #\Tab #\Newline #\Return)
     (uiop:run-program (cons program arguments) :output :string :error-output nil))))
-(defun match-font (name &key bold italic)
-  (let* ((family (if (listp name) (format nil "~{~A~^,~}" name) (or name "sans")))
-         (pattern (format nil "~A~A~A" family (if bold ":weight=bold" "") (if italic ":slant=italic" "")))
-         (path (%fontconfig "fc-match" (list "-f" "%{file}" pattern))))
-    (cond ((and path (plusp (length path)) (probe-file path)) path)
-          ((probe-file "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
-           "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"))))
+;; Discovery is implemented in SYSFONT after these shared font adapters load.
+(declaim (ftype function match-font get-fonts sys-font))
 (defun get-default-font ()
   "Return the bundled DejaVu Sans font; fall back to system sans if unavailable."
   (let ((bundled (ignore-errors
@@ -292,9 +287,6 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
         (match-font "sans")
         (error 'pixelisp:dependency-error :operation 'get-default-font
                :message "Bundled font is missing; pass a font pathname or install a system TrueType font"))))
-(defun get-fonts ()
-  (let ((output (%fontconfig "fc-list" (list "-f" (format nil "%{family}~%")))))
-    (remove-duplicates (mapcar #'string-downcase (uiop:split-string (or output "") :separator '(#\Newline))) :test #'string=)))
 (declaim (ftype function %make-font-from-source)) ; Implemented in FONT-MEMORY.
 (defun make-font (&optional filename (point-size 16))
   "Open a font from a path, encoded octets or binary stream; NIL selects the bundled font."
@@ -316,10 +308,6 @@ The pointer must remain valid and writable for that whole lifetime. Use FROM-STR
              resource))
       (unless complete (sdl2-ttf:close-font native)))))
 (defun font (&optional filename (point-size 16)) (make-font filename point-size))
-(defun sys-font (name point-size &key bold italic)
-  (let ((font (make-font (or (match-font name :bold bold :italic italic) (get-default-font)) point-size)))
-    (set-bold font bold) (set-italic font italic) font))
-(setf (fdefinition 'sysfont) #'sys-font)
 (defun %ptr (font)
   (check-type font font)
   (pixelisp.internal:ensure-live font)

@@ -30,9 +30,11 @@ normal highlight on restart without rebuilding pixels. Fills and drawing use
 exact native palette indices, keeping warning cues distinct even in themes
 whose palette entries share an initial color. Its melody cues are
 generated WAV assets decoded from memory and cached for replay; other games
-construct sounds directly from sample arrays. Game state and update
-helpers are ordinary Lisp data and functions, which makes the rules testable
-without a native window.
+construct sounds directly from sample arrays. Echo Grove also keeps its four
+pad sprites across restarts while replacing their ordered display group; weak
+reverse membership lets the discarded scene group be collected. Game state and
+update helpers are ordinary Lisp data and functions, which makes the rules
+testable without a native window.
 
 Prism Breaker opens the first mapped gamepad through a joystick/controller
 bridge, releases the temporary joystick, and keeps the independent controller

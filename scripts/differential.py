@@ -58,7 +58,63 @@ CASE_NAMES = [
     "controller bridges and mapping edits",
     "FreeType memory sources and collections",
     "native packed drawing colors", "FreeType DPI scaling",
+    "weak sprite group lifetimes", "FreeType padded cells and default colors",
+    "ordered system font matching",
 ]
+
+
+def weak_sprite_group_lifetimes():
+    import gc
+    import weakref
+    weak = pygame.sprite.WeakDirtySprite()
+    ordinary = pygame.sprite.Sprite()
+    weak_group, ordinary_group = pygame.sprite.Group(weak), pygame.sprite.Group(ordinary)
+    reference = weakref.ref(weak_group)
+    normal_reference = weakref.ref(ordinary_group)
+    before = [int(weak.alive()), len(weak.groups()), int(ordinary.alive())]
+    del weak_group, ordinary_group
+    gc.collect()
+    result = [before, int(reference() is None), int(weak.alive()), len(weak.groups()),
+              int(normal_reference() is not None), int(ordinary.alive()), weak.dirty]
+    ordinary.kill()
+    result.append(int(ordinary.alive()))
+    return result
+
+
+def freetype_padded_cells_and_colors():
+    import pygame.freetype as ft
+    font = ft.Font(str(ROOT / "assets/fonts/DejaVuSans.ttf"), 24)
+    font.pad = True
+    cells = []
+    for vertical in [False, True]:
+        font.vertical = vertical
+        cells.append([list(font.render(text, (255, 255, 255))[0].get_size())
+                      for text in ["A", "g", "Ag", " "]])
+    font.vertical = False
+    font.fgcolor, font.bgcolor = (200, 30, 40), (10, 20, 30)
+    surface, _ = font.render("A")
+    override, _ = font.render("A", (0, 0, 255), (20, 40, 60))
+    return [cells, list(font.fgcolor), list(font.bgcolor),
+            list(surface.get_at((0, 0))), list(override.get_at((0, 0))),
+            list(font.render_raw("A")[1])]
+
+
+def ordered_system_font_matching():
+    import pygame.sysfont as sf
+    original = sf.Sysfonts, sf.Sysalias, sf.is_init
+    try:
+        sf.Sysfonts = {"alpha": {(False, False): "/fonts/R.ttf",
+                                 (True, False): "/fonts/B.ttf",
+                                 (False, True): "/fonts/I.ttf"},
+                       "beta": {(False, False): "/fonts/Other.otf"}}
+        sf.Sysalias, sf.is_init = {"alias": sf.Sysfonts["alpha"]}, True
+        paths = [None, "/fonts/R.ttf", "/fonts/B.ttf", "/fonts/I.ttf", "/fonts/Other.otf"]
+        cases = [("missing,Alpha", False, False), (["missing", "alias"], True, False),
+                 (("missing", "beta"), False, False), ("a-l p h a", False, True),
+                 ("alpha", True, True), ("unknown", False, False)]
+        return [paths.index(sf.match_font(names, bold, italic)) for names, bold, italic in cases]
+    finally:
+        sf.Sysfonts, sf.Sysalias, sf.is_init = original
 
 
 def native_packed_drawing_colors():
@@ -1432,6 +1488,7 @@ def reference():
         controller_bridges_and_mapping_edits(),
         freetype_memory_sources_and_collections(),
         native_packed_drawing_colors(), freetype_dpi_scaling(),
+        weak_sprite_group_lifetimes(), freetype_padded_cells_and_colors(), ordered_system_font_matching(),
     ]
 
 

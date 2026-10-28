@@ -11,7 +11,7 @@
            #:size #:kerning #:antialiased #:origin #:style #:underline #:oblique #:strong #:wide
            #:strength #:underline-adjustment #:get-sized-height #:get-sized-ascender
            #:get-sized-descender #:name #:render-raw-to #:rotation #:vertical #:use-bitmap-strikes
-           #:load-font-bytes #:path #:font-index #:num-faces #:resolution
+           #:load-font-bytes #:path #:font-index #:num-faces #:resolution #:pad #:fgcolor #:bgcolor
            #:get-default-resolution #:set-default-resolution))
 (in-package #:pixelisp.freetype)
 (defconstant style-normal 0)
@@ -28,6 +28,11 @@
    (kerning :initarg :kerning :initform t :accessor kerning)
    (antialiased :initarg :antialiased :initform t :accessor antialiased)
    (origin :initarg :origin :initform nil :accessor origin)
+   ;; These values belong to the font. Public color readers/writers copy them
+   ;; so changing a caller's Color cannot silently alter later text rendering.
+   (fgcolor :initform (pixelisp:make-color 255 255 255 255) :accessor %fgcolor)
+   (bgcolor :initform nil :accessor %bgcolor)
+   (pad :initform nil :accessor %pad)
    (rotation :initarg :rotation :initform 0 :reader %rotation)
    (vertical :initarg :vertical :initform nil :reader %vertical)
    ;; Pygame retains the last successfully laid-out text for NIL calls.
@@ -181,8 +186,18 @@ defaults to the current module DPI; zero selects that same module default."
   (make-font source size :kerning kerning :antialiased antialiased
              :font-index font-index :resolution resolution))
 (defun sys-font (name size &key bold italic (resolution 0))
-  (make-font (or (match-font name :bold bold :italic italic) (get-default-font))
-             size :resolution resolution))
+  "Open a system family, synthesizing only requested styles absent from its face."
+  (multiple-value-bind (path native-bold native-italic)
+      (pixelisp.font::%match-system-font name :bold bold :italic italic)
+    (let ((font (make-font (or path (get-default-font)) size :resolution resolution))
+          (complete nil))
+      (unwind-protect
+           (progn
+             (when (and bold (not native-bold)) (setf (strong font) t))
+             (when (and italic (not native-italic)) (setf (oblique font) t))
+             (setf complete t)
+             font)
+        (unless complete (pixelisp.internal:dispose font))))))
 (setf (fdefinition 'sysfont) #'sys-font)
 (defun %face (font &optional requested-size)
   (check-type font font)
@@ -215,6 +230,40 @@ defaults to the current module DPI; zero selects that same module default."
   (check-type font font)
   (pixelisp.internal:ensure-live font)
   (%vertical font))
+(defun pad (font)
+  "Whether text bounds include the font's full baseline or vertical cell."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%pad font))
+(defun (setf pad) (value font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (check-type value boolean)
+  (setf (%pad font) value))
+(defun %copy-color (value)
+  (when value
+    (multiple-value-call #'pixelisp:make-color (pixelisp.internal:rgba value))))
+(defun fgcolor (font)
+  "Return an independent copy of the default text foreground Color."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%copy-color (%fgcolor font)))
+(defun (setf fgcolor) (value font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (unless value (error "The default foreground must be a color."))
+  (setf (%fgcolor font) (%copy-color value))
+  (fgcolor font))
+(defun bgcolor (font)
+  "Return a copy of the default background Color, or NIL for transparency."
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (%copy-color (%bgcolor font)))
+(defun (setf bgcolor) (value font)
+  (check-type font font)
+  (pixelisp.internal:ensure-live font)
+  (setf (%bgcolor font) (%copy-color value))
+  (bgcolor font))
 (defun use-bitmap-strikes (font)
   (check-type font font)
   (pixelisp.internal:ensure-live font)
@@ -417,6 +466,9 @@ the next character is loaded; no face-wide transform survives this call."
     (when (and rotated (logtest active-style style-wide))
       (error 'pixelisp:unsupported-feature :operation 'rotation
              :message "The wide style cannot be combined with rotation."))
+    (when (and rotated (%pad font))
+      (error 'pixelisp:unsupported-feature :operation 'render
+             :message "Padded text cannot be combined with rotation."))
     (when (and (or rotated vertical-layout) (logtest active-style style-underline))
       (error 'pixelisp:unsupported-feature :operation 'render
              :message "Underline cannot be combined with rotation or vertical layout."))
@@ -450,6 +502,20 @@ the next character is loaded; no face-wide transform survives this call."
             (end-y (round (* pen axis-y))))
         (setf left (min left end-x) right (max right end-x)
               top (min top end-y) bottom (max bottom end-y)))
+      (when (%pad font)
+        ;; Padding changes only allocation/placement bounds. Glyph coordinates
+        ;; remain relative to the same baseline. Rotated padding is rejected
+        ;; above, matching pygame's restriction.
+        (let ((metrics (freetype2-types:ft-size-metrics
+                        (freetype2-types:ft-face-size face))))
+          (if vertical-layout
+              (let ((half-advance (/ (freetype2-types:ft-size-metrics-max-advance metrics) 128)))
+                (setf left (min left (floor (- half-advance)))
+                      right (max right (ceiling half-advance)))
+                (when (zerop (length text))
+                  (setf bottom (max bottom (ceiling (freetype2-types:ft-size-metrics-height metrics) 64)))))
+              (setf top (min top (- (ceiling (freetype2-types:ft-size-metrics-ascender metrics) 64)))
+                    bottom (max bottom (1+ (- (floor (freetype2-types:ft-size-metrics-descender metrics) 64))))))))
       (let ((bounds (pixelisp:make-rect left top (max 1 (- right left)) (max 1 (- bottom top)))))
         ;; Store only after all validation and glyph layout succeeded.
         (setf (%previous-text font) (copy-seq text))
@@ -472,11 +538,16 @@ the next character is loaded; no face-wide transform survives this call."
                                   (list red green blue) (list back-red back-green back-blue))))
             (px.surface:set-at surface position (append channels (list (round (* 255 output-alpha)))))))))))
 
-(defun render (font text &optional (foreground '(255 255 255 255)) background &key size (style style-default) (rotation (rotation font)))
-  "Return a rendered Surface and baseline-relative Rect as two values."
+(defun render (font text &optional foreground (background nil background-p) &key size (style style-default) (rotation (rotation font)))
+  "Return a Surface and baseline-relative Rect, using the font's default colors.
+An explicit NIL background requests transparency, overriding the saved background."
   (multiple-value-bind (glyphs rect) (%layout font text size style rotation)
-    (let ((surface (px.surface:make-surface (list (px.rect:width rect) (px.rect:height rect)) :alpha t))
+    ;; Resolve and validate both colors before allocating the output surface.
+    (let ((foreground (%copy-color (or foreground (%fgcolor font))))
+          (background (%copy-color (if background-p background (%bgcolor font))))
+          (surface nil)
           (complete nil))
+      (setf surface (px.surface:make-surface (list (px.rect:width rect) (px.rect:height rect)) :alpha t))
       (unwind-protect
            (progn
              (when background (px.surface:fill surface background))
@@ -491,11 +562,13 @@ the next character is loaded; no face-wide transform survives this call."
              (values surface rect))
         ;; A malformed color or failed pixel write must not leak this new owner.
         (unless complete (pixelisp.internal:dispose surface))))))
-(defun render-to (font target destination text &optional (foreground '(255 255 255)) background &key size (style style-default) (rotation (rotation font)))
+(defun render-to (font target destination text &optional foreground (background nil background-p) &key size (style style-default) (rotation (rotation font)))
   "Render to TARGET at a top-left destination, or baseline when ORIGIN is true."
   (pixelisp.internal:ensure-live font)
   (let ((coordinates (%destination-xy destination)))
-    (multiple-value-bind (surface rect) (render font text foreground background :size size :style style :rotation rotation)
+    (multiple-value-bind (surface rect)
+        (render font text foreground (if background-p background (bgcolor font))
+                :size size :style style :rotation rotation)
       (let ((position (if (origin font)
                           (list (+ (first coordinates) (px.rect:x rect))
                                 (+ (second coordinates) (px.rect:y rect)))
