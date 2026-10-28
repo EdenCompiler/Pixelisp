@@ -19,7 +19,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, native packed integer colors, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
 | `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams with optional decoded format/palette preservation; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
-| `transform` | `px.transform` | Native format/index-preserving flip, nearest scaling, rotation, scale2x and chop; 24/32-bit smooth scaling, RGBA32 rotozoom, color operations, thresholding, Laplacian edges |
+| `transform` | `px.transform` | Native format/index-preserving flip, nearest scaling, rotation, scale2x and chop; 24/32-bit smooth scaling with the generic backend, RGBA32 rotozoom, palette-aware surface averaging, color operations, thresholding, Laplacian edges |
 | `event` | `px.event` | Native event copying including mouse device/window identity, touch origin and precise wheel deltas; include/exclude retrieval with optional pumping, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
 | `key` | `px.key` | Scancode state, keyword names, modifiers, focus, text-input controls and configurable pump-delivered native key repeat |
 | `mouse` | `px.mouse` | Position, relative movement, buttons, visibility, focus, relative mode |
@@ -40,12 +40,12 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `surfarray` | `px.surfarray` | Packed/RGB/channel copies across native depths, packed views except 24-bit, full byte-channel views at 24/32-bit, array-to-surface operations |
 | `pixelcopy` | `px.pixelcopy` | Copy into existing arrays and map pixel formats |
 | `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, 1D rows/columns, metadata, color setters, scalar fills, broadcast assignment with overlap snapshots, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
-| `BufferProxy`, `bufferproxy`, `newbuffer` | `px.buffer`, `px.bufferproxy` | Owner-backed views, bounds/lifetime checks, explicit release and slicing |
+| `BufferProxy`, `bufferproxy`, `newbuffer` | `px.buffer`, `px.bufferproxy` | Owner-backed views, bounds/lifetime checks, explicit release and slicing; native-order octet copies for contiguous integer/float views, bounded partial writes and overlap-safe source snapshots |
 | `camera`, camera backends | `px.camera` | Linux V4L2 enumeration/capture, negotiated resolution, queried controls, RGB/HSV/YUV conversions |
 | `scrap` | `px.scrap` | UTF-8 clipboard and primary selection; advertises text-only capabilities |
 | `threads` | `px.threads` | Workers, multiple values, failure propagation, ordered bounded parallel map |
 | `fastevent` | `px.fastevent` | Operational facade over the modern event queue |
-| `_sdl2`, `_sdl2.sdl2`, `_sdl2.video` | `px.sdl2`, `px.sdl2.video` | Independent windows with identity, fullscreen/windowed requests, resize/border/opacity/grab/icon controls; renderer blitting, driver/capability queries, custom blend composition, state, targets/readback, texture updates, atlas Image regions with tint/alpha/pivots and ownership |
+| `_sdl2`, `_sdl2.sdl2`, `_sdl2.video` | `px.sdl2`, `px.sdl2.video` | Independent windows with identity, fullscreen/windowed requests, resize/border/opacity/grab/icon controls, modal-parent requests, input-only focus and SDL-global relative mouse mode; renderer blitting, driver/capability queries, custom blend composition, state, targets/readback, texture updates, atlas Image regions with tint/alpha/pivots and ownership |
 | `_sdl2.audio` | `px.sdl2.audio` | Raw queued PCM playback/capture devices, enumeration and ownership |
 | `_sdl2.mixer` | `px.sdl2.mixer` | Post-mix observation via a bounded native PCM ring, drained on the Lisp thread |
 | `examples` | `px.examples`, `pixelisp/examples` | Four playable games—Prism Breaker, Orbit Patrol, Crater Command, and Echo Grove—with a shared 900×620 runner, deterministic bounded runs, synthetic input, gameplay snapshots, and generated audio |
@@ -83,12 +83,26 @@ The exported Lisp symbols and module API guides describe the actual interface.
   rejects that depth as pygame does. Copied 24-bit values use 32-bit arrays.
   Nonempty surfaces and the documented native depths are supported; other
   bit depths or mask layouts signal explicit errors.
+- Buffer `raw` returns an independent specialized octet vector in native byte
+  order for contiguous C- or Fortran-layout integer, single-float and
+  double-float views. Gapped or reversed views must be copied with `to-array`
+  first. `write-bytes` supports validated partial-element patches, snapshots
+  source views before mutation, and leaves untouched element bytes intact.
 - Drawing, antialiasing, alpha rounding, filtered transforms, and text layout
   can differ from pygame's exact pixels. The implementation favors readable
   CPU algorithms; there is no performance or bit-exact parity claim.
   Integer drawing colors use the destination's native format; full samples
   retain exact palette indices and storage bits. Shared gfxdraw helpers accept
   these integers too, beyond pygame.gfxdraw's documented color forms.
+  `px.transform:average-surfaces` averages decoded RGB palette colors by
+  default and maps the rounded result through the output palette. New outputs
+  copy the first source's palette; supplied destinations retain their own. This
+  intentionally corrects inconsistent indexed-color results observed in
+  local pygame 2.6.1 builds. Only raw-index and truecolor averaging are
+  differential-checked. `:palette-colors nil` selects stored-index averaging
+  when every input is 8-bit indexed; mixed-format inputs always average decoded
+  RGB. The smoothscale backend API reports `:generic`; SIMD requests signal
+  `px:unsupported-feature` because this build has no SIMD variants.
 - Direct FreeType strong/oblique/wide styling requires outline fonts; bitmap
   fonts can still be rendered and underlined. Bitmap wide styling and pygame's
   layout cache are not implemented. Sizes use fractional points and per-font
@@ -126,6 +140,9 @@ The exported Lisp symbols and module API guides describe the actual interface.
 - The default display has a logical software resolution and scales it when
   the native window is resized. Explicit SDL renderer windows use a separate
   API and cannot be mixed with that software window's native surface.
+  SDL relative mouse mode is global even though the compatibility property
+  takes a window. Modal parenting is supported only by SDL's X11 backend;
+  input-only focus can fail on backends that reject SDL's request.
   Display information is returned as ordinary plists; mode enumeration returns
   size pairs or NIL, without pygame's unrestricted-mode integer sentinel.
   Desktop sizing fills zero axes independently. `mode-ok` queries native
@@ -250,6 +267,13 @@ restart. System-font tests use a controlled inventory plus real bundled-font
 rendering to verify fallback order, copied results, variant selection and failed
 style setup cleanup. Text tests verify padded baseline masks, raw/surface target
 agreement, color ownership, override behavior and validation before target writes.
+Buffer byte tests cover C/F physical ordering, row padding, signed and float
+encodings, partial elements, overlapping input, read-only access and closed
+views. Averaging tests cover indexed colors/indices, native pixel depths,
+mixed formats, destination clips and aliases. Window tests reject wrong
+resource kinds, closed windows and worker-thread calls; Xvfb checks modal
+parenting and input-only focus. Echo Grove's gameplay test follows a cue from
+its bright frame through its averaged afterglow to the player's turn.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
 The retained-text fixture compares immediate reuse. The local pygame build's

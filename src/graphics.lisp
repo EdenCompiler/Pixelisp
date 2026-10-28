@@ -19,7 +19,8 @@
   (:nicknames #:px.transform)
   (:use #:cl)
   (:export #:flip #:scale #:scale-by #:smoothscale #:smoothscale-by #:rotate #:rotozoom
-           #:scale2x #:chop #:grayscale #:laplacian #:average-color #:average-surfaces #:threshold))
+           #:scale2x #:chop #:grayscale #:laplacian #:average-color #:average-surfaces #:threshold
+           #:get-smoothscale-backend #:set-smoothscale-backend))
 (defpackage #:pixelisp.mask
   (:nicknames #:px.mask)
   (:use #:cl)
@@ -657,19 +658,6 @@ and output are handled from a pixel snapshot so each result uses original pixels
                         (if (zerop weight) 0 (floor green weight))
                         (if (zerop weight) 0 (floor blue weight))
                         (if (zerop count) 0 (floor alpha count)))))
-
-(defun average-surfaces (surfaces &optional destination)
-  "Average equal-sized surfaces channel by channel into a new image."
-  (let* ((surfaces (coerce surfaces 'list)) (source (first surfaces)))
-    (unless source (error "At least one Surface is needed."))
-    (unless (every (lambda (surface) (equal (px.surface:size surface) (px.surface:size source))) surfaces)
-      (error "All averaged surfaces must have equal dimensions."))
-    (let ((result (or destination (%new-like source (px.surface:width source) (px.surface:height source)))))
-      (unless (equal (px.surface:size result) (px.surface:size source)) (error "Destination size differs."))
-      (dotimes (y (px.surface:height source) result)
-        (dotimes (x (px.surface:width source))
-          (px.surface:set-at result (list x y)
-            (%weighted-color (mapcar (lambda (surface) (list (px.surface:get-at surface (list x y)) 1)) surfaces))))))))
 
 (defun threshold (destination source search-color &key (threshold '(0 0 0 255))
                         (set-color '(0 0 0 0)) (set-behavior 1) search-surface inverse)

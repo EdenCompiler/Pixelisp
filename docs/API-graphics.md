@@ -92,6 +92,25 @@ and in-place operation stable. Alpha is filtered too, so fully opaque RGBA
 input can produce transparent edges. Use an opaque source when displaying
 RGB edge responses, such as an opaque gameplay backdrop.
 
+`px.transform:average-surfaces` accepts a nonempty list or vector of equal-size
+surfaces, including sources with different pixel formats. It averages RGB
+channels and writes opaque pixels; source alpha is not part of the average. An
+optional destination must match the first source's dimensions and pixel format.
+Use `(px.transform:average-surfaces sources nil :palette-colors nil)` when all
+inputs are 8-bit indexed surfaces to average their stored byte indices instead
+of palette colors. The explicit NIL requests a new destination. For inputs with mixed
+formats, it averages decoded RGB colors regardless of this option. By default,
+it averages decoded palette colors and maps the result through the output
+palette. A newly created result keeps the first source's format and an independent
+copy of its palette; a supplied destination keeps its own palette. Destination clipping
+is ignored, and inputs are snapshotted before writes, so aliases and in-place
+destinations are safe.
+
+`get-smoothscale-backend` reports `:generic`, the only backend in this build.
+`set-smoothscale-backend` accepts `:generic` or a case-insensitive `"GENERIC"`;
+requests for SIMD backends such as MMX or SSE signal
+`px:unsupported-feature`.
+
 ```lisp
 (let ((half (px.transform:smoothscale source '(64 48)))
       (mirror (px.transform:flip source t nil)))

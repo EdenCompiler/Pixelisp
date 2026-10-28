@@ -107,22 +107,41 @@
         :phase (%echo-state-phase state) :position (%echo-state-position state)
         :pattern (copy-list (%echo-state-pattern state))))
 
+(defun %echo-afterglow-colors (colors dim-colors)
+  "Blend lit and dim cues once, then reuse the colors in the indexed atlas."
+  (px.surface:with-surface (lit '(4 1))
+    (px.surface:with-surface (dim '(4 1))
+      (loop for color in colors for dim-color in dim-colors for x from 0 do
+        (px.surface:set-at lit (list x 0) color)
+        (px.surface:set-at dim (list x 0) dim-color))
+      (px:with-resource (mean (px.transform:average-surfaces (list lit dim)))
+        (loop for x below 4 collect
+          (px.color:to-list (px.surface:get-at mean (list x 0))))))))
+
+(defun %echo-pad-row (state column)
+  "Let the final part of a cue fade before the next note or player input."
+  (cond ((not (eql column (%echo-state-active state))) 0)
+        ((< 0d0 (%echo-state-flash-time state) 0.14d0) 2)
+        (t 1)))
+
 (defun %echo-pad-atlas (colors)
-  "Pack dim/lit frames into an indexed sheet with an editable shared palette."
-  (let ((sheet (px.surface:make-surface '(1336 264) :depth 8)))
-    ;; The first ten entries cover the artwork exactly. Each frame stores only
-    ;; their indices; changing entry 8 changes every lit pad's top highlight.
+  "Pack dim, lit and afterglow frames into one editable indexed sheet."
+  (let* ((dim-colors (mapcar (lambda (color)
+                              (mapcar (lambda (c) (round (* c 0.32))) color)) colors))
+         (afterglow (%echo-afterglow-colors colors dim-colors))
+         (sheet (px.surface:make-surface '(1336 396) :depth 8)))
+    ;; Each frame stores palette indices. Entry 8 changes every lit pad's
+    ;; warning highlight; entries 10..13 hold the averaged afterglow colors.
     (px.surface:set-palette sheet
-      (append (mapcar (lambda (color) (mapcar (lambda (c) (round (* c 0.32))) color)) colors)
-              colors '((245 250 255) (8 17 30))))
+      (append dim-colors colors '((245 250 255) (8 17 30)) afterglow))
     (loop for column below 4 do
-      (loop for lit in '(nil t) for row from 0 do
+      (loop for mode in '(:dim :lit :afterglow) for row from 0 do
         (let ((x (* column 334)) (y (* row 132)))
-          ;; Integer drawing colors select exact palette entries. The lit cue
-          ;; always stores index 8, even if a caller supplies matching pad and
-          ;; highlight colors; later warning recolors still affect that cue.
-          (px.surface:fill sheet (if lit (+ column 4) column) (list x y 334 132))
-          (px.draw:rect sheet (if lit 8 (+ column 4)) (list x y 334 5))
+          ;; Exact indices keep warnings separate even in duplicate-color themes.
+          (px.surface:fill sheet
+                           (+ column (ecase mode (:dim 0) (:lit 4) (:afterglow 10)))
+                           (list x y 334 132))
+          (px.draw:rect sheet (if (eq mode :lit) 8 (+ column 4)) (list x y 334 5))
           (px.draw:rect sheet 9 (list x (+ y 124) 334 8)))))
     sheet))
 
@@ -158,7 +177,7 @@
        ;; Screen rectangles stay independent of the source-image coordinates.
        (loop for pad in pads for column from 0
              do (setf (px.sprite:source-rect pad)
-                      (list (* column 334) (if (eql column (%echo-state-active state)) 132 0)
+                      (list (* column 334) (* 132 (%echo-pad-row state column))
                             334 132)))
        (px.sprite:draw group (session-screen current-session))
        (loop for rect in +echo-pad-rects+ for label in '("1 / ↑" "2 / →" "3 / ←" "4 / ↓")

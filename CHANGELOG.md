@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add native-order octet copies and writes for contiguous integer and floating
+  buffer views. Partial element updates preserve untouched bytes; validation
+  and overlap snapshots complete before mutation, while gapped and reversed
+  views require an explicit array copy.
+- Add `average-surfaces` with decoded palette-color averaging by default and
+  optional raw-index averaging for all-indexed inputs, plus generic-only
+  smoothscale backend queries/setters. Decoded palette means are mapped
+  correctly through the destination palette; local pygame 2.6.1 indexed
+  averaging is inconsistent, so only raw-index and truecolor paths are
+  differential-checked.
+- Add SDL2 modal-parent requests, input-only focus, and a writable relative
+  mouse property. Relative mode follows SDL's global state; backend capability
+  failures signal `px:unsupported-feature`.
+- Give Echo Grove a fading melody cue using cached averaged-color afterglow
+  frames in its indexed atlas.
 - Add WeakSprite/WeakDirtySprite equivalents: groups retain sprites while
   reusable sprites hold weak reverse memberships. Echo Grove replaces its
   display group on restart without retaining retired scene groups.

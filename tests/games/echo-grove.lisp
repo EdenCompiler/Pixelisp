@@ -1,6 +1,28 @@
 (in-package #:pixelisp.examples.tests)
 (in-suite examples)
 
+(test echo-grove-cue-afterglow-fades-before-the-next-note
+  (px:with-init (:video nil)
+    (px.surface:with-surface (screen '(900 620))
+      (let* ((session (px.examples::make-game-session :screen screen))
+             (game (px.examples::make-echo-grove session))
+             (state (px.examples::mini-game-state game)))
+        (setf (px.examples::%echo-state-pattern state) '(0))
+        (px.examples::%echo-step state 0.7d0 session)
+        (funcall (px.examples::mini-game-on-draw game) state session)
+        (is (= 67 (px:color-r (px.surface:get-at screen '(110 180)))))
+        ;; A cue is initially bright, then uses its cached averaged frame.
+        (px.examples::%echo-step state 0.32d0 session)
+        (is (= 2 (px.examples::%echo-pad-row state 0)))
+        (funcall (px.examples::mini-game-on-draw game) state session)
+        (is (equal '(44 122 164 255)
+                   (px.color:to-list (px.surface:get-at screen '(110 180)))))
+        (px.examples::%echo-step state 0.11d0 session)
+        (is (eq :input (px.examples::%echo-state-phase state)))
+        (funcall (px.examples::mini-game-on-draw game) state session)
+        (is (= 21 (px:color-r (px.surface:get-at screen '(110 180)))))
+        (is-false (px.surface:locked-p screen))))))
+
 (test echo-grove-warning-index-survives-duplicate-pad-colors
   (px:with-init (:video nil)
     ;; A custom theme can reuse the initial highlight color. Drawing by native

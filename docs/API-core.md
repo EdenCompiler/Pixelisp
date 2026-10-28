@@ -495,6 +495,34 @@ be shorter than pygame's nominal `pitch * height` buffer. Inter-row gaps can
 include neighboring parent pixels. Use a channel or packed view when edits
 should stay inside the child's logical rectangle.
 
+`px.buffer:parent` returns a live view's immediate owner. `byte-length` is the
+BufferProxy `length` equivalent: element count times element byte size, without
+stride gaps. `contiguous-p` checks for forward C or Fortran storage. `raw`
+returns an independent specialized octet vector in **physical storage order**;
+for X/Y packed surface views, X varies fastest. Whole-byte signed/unsigned
+integers and native single/double floats are supported. Callback-only views
+with no strides use Lisp row-major order.
+
+`write-bytes` (also named `write`) copies an octet list/vector or another
+contiguous view into storage at a byte `:offset`. Partial-element writes retain
+untouched bytes, and overlapping source views are snapshotted. Bounds, input
+octets and decoding are validated before any destination callback writes.
+Empty writes at the end are allowed. A user-provided writer that itself signals
+an error can leave earlier callback writes applied.
+
+```lisp
+(px.buffer:with-view (pixels (px.surface:get-view image "2"))
+  (let ((checkpoint (px.buffer:raw pixels)))
+    ;; Checkpoints contain bytes, independent of the locked surface.
+    (px.buffer:write-bytes pixels checkpoint)))
+```
+
+Raw copies and byte writes require contiguous storage, following pygame 2.6.1's
+implementation. Gapped/reversed views signal `px:unsupported-feature`; use
+`to-array` for their logical elements. Read-only byte writes signal the same
+condition. Closed views and disposed owners signal `px:disposed-resource`.
+Copied bytes do not pin the owner; close each view to release its lock.
+
 `px.surfarray:array2d`, `array3d`, `array-alpha`, and channel variants copy pixels
 into specialized CL arrays. The array axes are **X, Y, channel**. `make-surface`
 and `blit-array` copy arrays back; `map-array` maps channels to packed pixels.

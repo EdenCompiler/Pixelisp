@@ -59,7 +59,7 @@
            #:window-id #:window-display-index #:window-resizable-p #:window-borderless-p
            #:window-opacity #:window-fullscreen-mode #:set-fullscreen #:set-windowed
            #:maximize-window #:minimize-window #:restore-window #:focus-window
-           #:window-grab-p #:set-window-icon
+           #:window-grab-p #:set-window-icon #:window-relative-mouse-p #:set-modal-for
            #:image #:make-image #:image-texture #:image-source-rect #:image-get-rect #:draw-image
            #:image-angle #:image-origin #:image-flip-x #:image-flip-y
            #:image-color #:image-alpha #:image-blend-mode))

@@ -60,7 +60,63 @@ CASE_NAMES = [
     "native packed drawing colors", "FreeType DPI scaling",
     "weak sprite group lifetimes", "FreeType padded cells and default colors",
     "ordered system font matching",
+    "BufferProxy byte copies and writes", "averaged surfaces and generic backend",
 ]
+
+
+def buffer_proxy_byte_copies_and_writes():
+    surface = pygame.Surface((3, 2), pygame.SRCALPHA, 32)
+    with pygame.PixelArray(surface) as pixels:
+        for y in range(2):
+            for x in range(3):
+                pixels[x, y] = 1 + x + 3 * y
+    view = surface.get_view("2")
+    before = view.raw
+    view.write(bytes([123, 45, 67]), offset=3)
+    after = view.raw
+    view.write(b"", offset=view.length)
+    parent = int(view.parent is surface)
+    length = view.length
+    del view  # Release the surface lock before inspecting another view.
+
+    def rejects_raw(candidate):
+        try:
+            candidate.raw
+            return 0
+        except ValueError:
+            return 1
+
+    rgb_rejected = rejects_raw(surface.get_view("3"))
+    padded = pygame.Surface((3, 2), depth=24)
+    gaps_rejected = rejects_raw(padded.get_view("2"))
+    return [list(before), list(after), length, parent, rgb_rejected,
+            gaps_rejected, padded.get_buffer().length]
+
+
+def averaged_surfaces_and_generic_backend():
+    first = pygame.Surface((2, 1), pygame.SRCALPHA, 32)
+    second = pygame.Surface((2, 1), pygame.SRCALPHA, 32)
+    for x, (a, b) in enumerate([((10, 20, 30, 0), (31, 41, 51, 120)),
+                                ((100, 110, 120, 50), (121, 131, 141, 240))]):
+        first.set_at((x, 0), a)
+        second.set_at((x, 0), b)
+    first.set_clip((0, 0, 0, 0))
+    pygame.transform.average_surfaces([first, second], first)
+    colors = [list(first.get_at((x, 0))) for x in range(2)]
+    indexed = [pygame.Surface((2, 1), depth=8) for _ in range(2)]
+    with pygame.PixelArray(indexed[0]) as pixels:
+        pixels[0, 0], pixels[1, 0] = 1, 4
+    with pygame.PixelArray(indexed[1]) as pixels:
+        pixels[0, 0], pixels[1, 0] = 3, 7
+    indices = pygame.transform.average_surfaces(indexed, palette_colors=False)
+    original = pygame.transform.get_smoothscale_backend()
+    try:
+        pygame.transform.set_smoothscale_backend("GENERIC")
+        generic = int(pygame.transform.get_smoothscale_backend() == "GENERIC")
+    finally:
+        pygame.transform.set_smoothscale_backend(original)
+    return [colors, [indices.get_at_mapped((x, 0)) for x in range(2)],
+            indices.get_bitsize(), generic]
 
 
 def weak_sprite_group_lifetimes():
@@ -1489,6 +1545,7 @@ def reference():
         freetype_memory_sources_and_collections(),
         native_packed_drawing_colors(), freetype_dpi_scaling(),
         weak_sprite_group_lifetimes(), freetype_padded_cells_and_colors(), ordered_system_font_matching(),
+        buffer_proxy_byte_copies_and_writes(), averaged_surfaces_and_generic_backend(),
     ]
 
 

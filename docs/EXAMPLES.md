@@ -24,7 +24,9 @@ across a PixelArray during asset creation, and that view closes before play. Orb
 Patrol uses cached rotations with RLE source blits, vectors, and pixel-mask collisions; Crater Command
 joins rendered terrain to a mutable mask; Echo Grove combines event input,
 cached text, pad sprites sampling dim/lit frames from a shared image atlas,
-and optional audio. The atlas uses indexed 8-bit pixels; changing a shared
+and optional audio. Its cue fades through a cached afterglow frame before
+going dark: `average-surfaces` blends the lit and dim colors once during asset
+creation. The atlas uses indexed 8-bit pixels; changing a shared
 highlight palette entry warns when one mistake life remains, and restores the
 normal highlight on restart without rebuilding pixels. Fills and drawing use
 exact native palette indices, keeping warning cues distinct even in themes

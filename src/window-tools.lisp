@@ -110,10 +110,6 @@
 (defun restore-window (window)
   "Restore WINDOW after it has been minimized or maximized."
   (pixelisp.internal:with-native-context (%wt-restore (%wt-pointer window))) window)
-(defun focus-window (window)
-  "Raise WINDOW and request input focus."
-  (pixelisp.internal:with-native-context (%wt-focus (%wt-pointer window))) window)
-
 (defun window-grab-p (window)
   "Return whether WINDOW has the input grab enabled."
   (pixelisp.internal:with-native-context (plusp (%wt-get-grab (%wt-pointer window)))))

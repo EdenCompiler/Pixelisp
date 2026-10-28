@@ -172,6 +172,29 @@ deliberately. The helpers `note-on`, `note-off`, `set-instrument`, and
 `pitch-bend` build standard channel messages. MIDI event timestamps use
 PortTime milliseconds. No port is opened by loading the system.
 
+## SDL2 window focus and mouse mode
+
+`px.sdl2.video:focus-window` raises a window and requests input focus. Pass
+`:input-only t` to request focus without raising it; this can focus a fully
+obscured window, and SDL may reject the request on a backend that does not
+support it. Backend failures signal `px:unsupported-feature`.
+`set-modal-for` marks a window as modal for a parent window. SDL supports this
+only on X11; the parent and child must be distinct live windows.
+
+`window-relative-mouse-p` reads or sets SDL's relative mouse mode. The API is
+window-shaped for parity with pygame's `_sdl2` window property, but SDL tracks
+the mode globally: setting it through one window changes what every window
+reads. A backend that cannot enable relative mode signals
+`px:unsupported-feature`. All three operations must run on the video thread.
+
+```lisp
+(px.sdl2.video:with-window (main-window :size '(800 600))
+  (px.sdl2.video:with-window (dialog :size '(320 200))
+    (px.sdl2.video:set-modal-for dialog main-window)
+    (px.sdl2.video:focus-window dialog :input-only t)
+    (setf (px.sdl2.video:window-relative-mouse-p main-window) t)))
+```
+
 ## SDL2 renderer and raw audio
 
 ```lisp

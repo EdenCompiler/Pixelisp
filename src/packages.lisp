@@ -54,6 +54,7 @@
   (:export #:from-surface #:overlap))
 (defpackage #:pixelisp.buffer
   (:use #:cl) (:nicknames #:px.buffer #:pixelisp.bufferproxy #:px.bufferproxy)
-  (:shadow #:close)
+  (:shadow #:close #:write)
   (:export #:buffer-view #:make-view #:view-ref #:dimensions #:strides #:byte-offset #:element-type
-           #:owner #:closed-p #:close #:with-view #:slice #:to-array))
+           #:owner #:closed-p #:close #:with-view #:slice #:to-array
+           #:parent #:byte-length #:contiguous-p #:raw #:write #:write-bytes))
