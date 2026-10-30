@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Add exact indexed `P` image-byte imports/exports and tightly packed shared
+  8-bit indexed and 24-bit RGB/BGR imports. Copied index assets start with a
+  separate white palette; RGBX imports have no per-pixel alpha. Keep raw image
+  transfer code separate from encoded-file loading and validate before allocation.
+- Extend pixelcopy with color-key masks and custom opaque/clear values,
+  singleton-axis array broadcasting and mapping into existing packed arrays.
+  Preserve exact packed-key comparisons, including alpha, and validate copied
+  values before destination writes. Prism Breaker uses broadcast paddle shading
+  and an indexed byte asset for its ball.
+- Correct surface alpha toggling: NIL disables blending even for RGBA sources,
+  while explicit 255 enables it on opaque formats as well. This keeps blits and
+  pixelcopy alpha queries consistent with pygame's SDL state.
+- Load bitmap cursor data from XBM paths or borrowed character streams, with
+  explicit bit-order conversion and dimension/hotspot validation. Loading cursor
+  assets does not initialize SDL or open a device.
 - Add native-order octet copies and writes for contiguous integer and floating
   buffer views. Partial element updates preserve untouched bytes; validation
   and overlap snapshots complete before mutation, while gapped and reversed

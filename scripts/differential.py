@@ -61,7 +61,81 @@ CASE_NAMES = [
     "weak sprite group lifetimes", "FreeType padded cells and default colors",
     "ordered system font matching",
     "BufferProxy byte copies and writes", "averaged surfaces and generic backend",
+    "indexed raw image transfer", "shared raw image layouts",
+    "pixelcopy masks broadcasts and mapping", "XBM cursor asset loading",
 ]
+
+
+def indexed_raw_image_transfer():
+    source = bytearray([1, 2, 3, 4, 5, 6])
+    image = pygame.image.frombytes(bytes(source), (3, 2), "P")
+    white = list(image.get_palette_at(0))
+    source[0] = 99
+    image.set_palette_at(1, (70, 80, 90))
+    image.set_palette_at(2, (70, 80, 90))
+    image.set_colorkey(2)
+    image.set_alpha(17)
+    image.set_clip((0, 0, 0, 0))
+    return [image.get_bitsize(), white, list(pygame.image.tobytes(image, "P")),
+            list(pygame.image.tobytes(image, "P", True)), source[0]]
+
+
+def shared_raw_image_layouts():
+    result = []
+    for fmt in ["P", "RGB", "BGR", "RGBA", "ARGB", "BGRA", "RGBX"]:
+        data = bytearray(range(1, 1 + 6 * len(fmt)))
+        image = pygame.image.frombuffer(data, (3, 2), fmt)
+        data[3 * len(fmt)] = 55
+        if fmt == "P":
+            image.set_palette_at(55, (20, 40, 60))
+        color = list(image.get_at((0, 1)))
+        image.set_at((1, 1), 78 if fmt == "P" else (70, 80, 90, 100))
+        result.append([image.get_bitsize(), image.get_pitch(), list(image.get_masks()), color, list(data)])
+    return result
+
+
+def pixelcopy_masks_broadcasts_and_mapping():
+    import numpy as np
+    alpha_values = []
+    for alpha in [False, True]:
+        image = pygame.Surface((1, 1), pygame.SRCALPHA if alpha else 0, 32)
+        image.set_at((0, 0), (10, 20, 30, 77))
+        row = []
+        for blanket in [None, 0, 70, 255]:
+            image.set_alpha(blanket)
+            target = np.zeros((1, 1), dtype=np.uint8)
+            pygame.pixelcopy.surface_to_array(target, image, "A", 37)
+            row.append(int(target[0, 0]))
+        alpha_values.append(row)
+    keyed = pygame.Surface((2, 1), pygame.SRCALPHA, 32)
+    keyed.set_at((0, 0), (10, 20, 30, 77))
+    keyed.set_at((1, 0), (10, 20, 30, 255))
+    keyed.set_colorkey((10, 20, 30, 255))
+    key_values = np.zeros((2, 1), dtype=np.uint8)
+    pygame.pixelcopy.surface_to_array(key_values, keyed, "C", 31, 4)
+    source = np.array([[[10, 20, 30], [40, 50, 60]]], dtype=np.uint8)
+    destination = np.zeros((3, 2), dtype=np.uint32)
+    format_surface = pygame.Surface((3, 2), 0, 32, (0xff, 0xff00, 0xff0000, 0))
+    pygame.pixelcopy.map_array(destination, source, format_surface)
+    pygame.pixelcopy.array_to_surface(format_surface, source)
+    source_pixel = pygame.Surface((1, 1), pygame.SRCALPHA, 32)
+    source_pixel.set_at((0, 0), (200, 50, 100, 0))
+    target_pixel = pygame.Surface((1, 1), pygame.SRCALPHA, 32)
+    blits = []
+    for blanket in [None, 255]:
+        source_pixel.set_alpha(blanket)
+        target_pixel.fill((10, 20, 30, 255))
+        target_pixel.blit(source_pixel, (0, 0))
+        blits.append(list(target_pixel.get_at((0, 0))))
+    return [alpha_values, key_values.tolist(), destination.tolist(),
+            [list(format_surface.get_at((x, y))) for y in range(2) for x in range(3)], blits]
+
+
+def xbm_cursor_asset_loading():
+    from io import StringIO
+    cursor = "#define cue_width 8\n#define cue_height 8\n#define cue_x_hot 3\n#define cue_y_hot 5\nstatic unsigned char cue_bits[] = {\n0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80\n};\n"
+    mask = "#define mask_width 8\n#define mask_height 8\nstatic char mask_bits[] = {\n0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff\n};\n"
+    return list(map(list, pygame.cursors.load_xbm(StringIO(cursor), StringIO(mask))))
 
 
 def buffer_proxy_byte_copies_and_writes():
@@ -1546,6 +1620,8 @@ def reference():
         native_packed_drawing_colors(), freetype_dpi_scaling(),
         weak_sprite_group_lifetimes(), freetype_padded_cells_and_colors(), ordered_system_font_matching(),
         buffer_proxy_byte_copies_and_writes(), averaged_surfaces_and_generic_backend(),
+        indexed_raw_image_transfer(), shared_raw_image_layouts(),
+        pixelcopy_masks_broadcasts_and_mapping(), xbm_cursor_asset_loading(),
     ]
 
 

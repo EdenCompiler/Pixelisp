@@ -242,6 +242,29 @@
            image)
       (unless complete (px:dispose image)))))
 
+(defun %breaker-ball-image ()
+  "Keep a tiny indexed sprite asset as bytes and install its palette separately."
+  (let ((indices (make-array 256 :element-type '(unsigned-byte 8) :initial-element 0)))
+    (dotimes (y 16)
+      (dotimes (x 16)
+        (setf (aref indices (+ x (* 16 y)))
+              (cond ((<= (+ (expt (- x 6) 2) (expt (- y 6) 2)) 9) 2)
+                    ((<= (+ (expt (- x 8) 2) (expt (- y 8) 2)) 49) 1)
+                    (t 0)))))
+    (let ((image (px.image:from-bytes indices '(16 16) :p)))
+      (px.surface:set-palette image '((0 0 0) (247 252 255) (131 231 255)))
+      ;; P bytes preserve index 0 exactly; its color key makes the corners clear.
+      (px.surface:set-colorkey image 0)
+      image)))
+
+(defun %breaker-paddle-gradient (paddle)
+  "Broadcast one RGB column over the paddle before painting its highlights."
+  (let ((column (make-array '(1 16 3) :element-type '(unsigned-byte 8))))
+    (dotimes (y 16)
+      (loop for channel in '(64 224 244) for c from 0 do
+        (setf (aref column 0 y c) (round (* channel (- 1 (/ y 48)))))))
+    (px.pixelcopy:array-to-surface paddle column)))
+
 (defun make-prism-breaker (session)
   "Build the Prism Breaker callback bundle and cache all reusable art once."
   (let* ((screen (session-screen session))
@@ -251,7 +274,7 @@
                                            (104 225 186) (83 196 255) (177 139 255))
                              collect (%breaker-brick-image color)))
          (paddle (px.surface:make-surface '(104 16) :alpha t))
-         (ball (px.surface:make-surface '(16 16) :alpha t)))
+         (ball (%breaker-ball-image)))
     (px.surface:fill background '(10 17 33))
     (px.draw:rect background '(17 29 51) '(32 112 836 446))
     (px.draw:rect background '(43 60 91) '(32 112 836 446) :width 2)
@@ -259,7 +282,7 @@
     (px.draw:rect background '(52 79 114) '(34 114 3 442))
     (px.draw:rect background '(52 79 114) '(863 114 3 442))
     (px.draw:rect background '(255 91 117) '(32 556 836 2))
-    (px.surface:fill paddle '(64 224 244))
+    (%breaker-paddle-gradient paddle)
     ;; A row is a live one-dimensional view. Its sliced highlight shares the
     ;; paddle's pixels; close both views before the next frame can blit it.
     (px.pixelarray:with-pixel-array (pixels paddle)
@@ -268,8 +291,6 @@
           (px.buffer:with-view (highlight (px.pixelarray:slice row '(8) '(88)))
             (px.pixelarray:assign highlight '(210 255 255))))))
     (px.draw:rect paddle '(29 121 172) '(0 12 104 4))
-    (px.draw:circle ball '(247 252 255) '(8 8) 7)
-    (px.draw:circle ball '(131 231 255) '(6 6) 3)
     (make-mini-game :id :prism-breaker :title "PRISM BREAKER"
           :instructions "Mouse / ← → / stick move · Space / A launch"
           :state (%breaker-new-state)

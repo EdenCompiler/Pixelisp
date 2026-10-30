@@ -142,8 +142,6 @@ When PRESERVE-FORMAT is true, retain SDL_image's decoded pixel format and palett
 (cffi:defcfun ("IMG_SaveJPG" %save-jpg) :int (surface :pointer) (file :string) (quality :int))
 (cffi:defcfun ("SDL_SaveBMP_RW" %save-bmp) :int (surface :pointer) (rw :pointer) (free :int))
 (cffi:defcfun ("SDL_RWFromFile" %rw-file) :pointer (file :string) (mode :string))
-(cffi:defcfun ("SDL_CreateRGBSurfaceWithFormatFrom" %surface-from) :pointer
-  (pixels :pointer) (width :int) (height :int) (depth :int) (pitch :int) (format :uint32))
 (defun %save-file (surface filename quality)
   "Write PNG, JPEG, or BMP according to the filename extension."
   (let* ((path (namestring (pathname filename)))
@@ -160,90 +158,6 @@ When PRESERVE-FORMAT is true, retain SDL_image's decoded pixel format and palett
                         (%save-bmp (pixelisp.internal:%ptr native) rw 1))))))
     (when (minusp rc) (error 'pixelisp:error :operation 'save :message "Unable to save image"))
     filename))
-(defun %format (format &optional (operation 'from-string))
-  (let ((name (substitute #\_ #\- (string-upcase (string format)))))
-    (unless (member name (if (eq operation 'to-string)
-                             '("RGB" "RGBA" "RGBX" "ARGB" "BGRA" "BGR"
-                               "RGBA_PREMULT" "ARGB_PREMULT")
-                             '("RGB" "RGBA" "RGBX" "ARGB" "BGRA" "BGR"))
-                    :test #'string=)
-      (error 'pixelisp:unsupported-feature :operation operation
-             :message (if (eq operation 'to-string)
-                          "Use RGB, RGBA, RGBX, ARGB, BGRA, BGR, RGBA_PREMULT or ARGB_PREMULT output bytes"
-                          "Use RGB, RGBA, RGBX, ARGB, BGRA or BGR pixel bytes")))
-    name))
-(defun from-string (bytes size format &optional flipped)
-  "Copy packed octets into a surface. SIZE is (width height); FLIPPED reverses rows."
-  (unless (typep bytes '(vector (unsigned-byte 8)))
-    (error 'type-error :datum bytes :expected-type '(vector (unsigned-byte 8))))
-  (multiple-value-bind (width height) (pixelisp.internal:pair size)
-    (let* ((fmt (%format format)) (channels (length fmt))
-           (surface (px.surface:make-surface size :alpha (= channels 4))))
-      (unless (= (length bytes) (* width height channels))
-        (pixelisp.internal:dispose surface)
-        (error 'pixelisp:error :operation 'from-string :message "Pixel byte count does not match dimensions"))
-      (dotimes (y height surface)
-        (dotimes (x width)
-          (let* ((offset (* channels (+ x (* width (if flipped (- height 1 y) y)))))
-                 (r (elt bytes (+ offset (position #\R fmt))))
-                 (g (elt bytes (+ offset (position #\G fmt))))
-                 (b (elt bytes (+ offset (position #\B fmt))))
-                 (a (if (find #\A fmt) (elt bytes (+ offset (position #\A fmt))) 255)))
-            (px.surface:set-at surface (list x y) (list r g b a))))))))
-(defun to-string (surface format &optional flipped)
-  "Return packed octets in FORMAT, ordered by rows. Premultiplied output uses per-pixel alpha."
-  (let* ((fmt (%format format 'to-string))
-         (premultiplied (member fmt '("RGBA_PREMULT" "ARGB_PREMULT") :test #'string=))
-         (order (if premultiplied (subseq fmt 0 4) fmt))
-         (channels (length order))
-         (width (px.surface:width surface)) (height (px.surface:height surface))
-         (bytes (make-array (* width height channels) :element-type '(unsigned-byte 8))))
-    ;; The wrapper's alpha flag can be set for compatibility even when a native
-    ;; pixel format has no alpha mask (for example an imported RGBX buffer).
-    ;; pygame's premultiplied export requires real per-pixel alpha storage.
-    (when (and premultiplied (zerop (fourth (px.surface:get-masks surface))))
-      (error 'pixelisp:unsupported-feature :operation 'to-string
-             :message "Premultiplied output requires a surface with a per-pixel alpha mask"))
-    (dotimes (y height bytes)
-      (dotimes (x width)
-        (multiple-value-bind (r g b a)
-            (pixelisp.internal:rgba (px.surface:get-at surface (list x (if flipped (- height 1 y) y))))
-          (when premultiplied
-            ;; pygame 2.6.1 uses integer floor division for each color channel.
-            (setf r (floor (* r a) 255)
-                  g (floor (* g a) 255)
-                  b (floor (* b a) 255)))
-          (loop for channel across order for k from 0 do
-            (setf (aref bytes (+ k (* channels (+ x (* width y)))))
-                  (case channel (#\R r) (#\G g) (#\B b) (#\A a) (#\X 255)))))))))
-(setf (fdefinition 'from-bytes) #'from-string (fdefinition 'to-bytes) #'to-string)
-(defun from-buffer (pointer size format &key owner byte-count)
-  "Share caller-owned foreign packed RGBA memory. OWNER is retained until surface disposal.
-The pointer must remain valid and writable for that whole lifetime. Use FROM-STRING to copy Lisp vectors."
-  (unless (cffi:pointerp pointer) (error 'type-error :datum pointer :expected-type 'cffi:foreign-pointer))
-  (when (cffi:null-pointer-p pointer)
-    (error 'type-error :datum pointer :expected-type 'cffi:foreign-pointer))
-  (when byte-count (check-type byte-count (integer 0 *)))
-  (multiple-value-bind (width height) (pixelisp.internal:pair size)
-    (check-type width (integer 1 *)) (check-type height (integer 1 *))
-    (let* ((fmt (%format format)) (depth (* 8 (length fmt)))
-           ;; SDL's byte-array formats; the 32-bit aliases account for host endianness.
-           (pixel-format (cond ((string= fmt "RGB") #x17101803)
-                               ((string= fmt "BGR") #x17401803)
-                               ((string= fmt "RGBA") #x16762004)
-                               ((string= fmt "BGRA") #x16362004)
-                               ((string= fmt "ARGB") #x16862004)
-                               (t #x16561804))))
-      (unless (= depth 32)
-        (error 'pixelisp:unsupported-feature :operation 'from-buffer :message "Shared surfaces require a 32-bit pixel format; use from-string for RGB/BGR"))
-      (when (and byte-count (< byte-count (* width height (length fmt))))
-        (error 'pixelisp:error :operation 'from-buffer :message "Foreign buffer is too short"))
-      (let ((native (%surface-from pointer width height depth (* width (length fmt)) pixel-format)))
-        (when (cffi:null-pointer-p native)
-          (error 'pixelisp:error :operation 'from-buffer :message "SDL rejected pixel buffer"))
-        (pixelisp.internal:wrap-surface (sdl2-ffi::make-sdl-surface :ptr native)
-                                         :owned t :alpha (= depth 32) :parent owner :preserve-format t)))))
-
 (in-package #:pixelisp.font)
 (defclass font (pixelisp.internal:resource)
   ((path :initarg :path :reader %path) (point-size :initarg :point-size :reader %point-size)

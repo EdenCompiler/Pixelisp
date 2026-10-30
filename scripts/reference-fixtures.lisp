@@ -10,6 +10,78 @@
     (loop for x below (px.surface:width surface)
           collect (px:color-r (px.surface:get-at surface (list x y))))))
 
+(defun fixture-indexed-raw-image-transfer ()
+  (let ((source (make-array 6 :element-type '(unsigned-byte 8) :initial-contents '(1 2 3 4 5 6))))
+    (px:with-resource (image (px.image:from-bytes source '(3 2) :p))
+      ;; pygame returns an RGB tuple here; Pixelisp consistently returns Color.
+      (let ((white (subseq (px.color:to-list (px.surface:get-palette-at image 0)) 0 3)))
+        (setf (aref source 0) 99)
+        (px.surface:set-palette-at image 1 '(70 80 90))
+        (px.surface:set-palette-at image 2 '(70 80 90))
+        (px.surface:set-colorkey image 2)
+        (px.surface:set-alpha image 17)
+        (px.surface:set-clip image '(0 0 0 0))
+        (list (px.surface:get-bitsize image) white
+              (coerce (px.image:to-bytes image :p) 'list)
+              (coerce (px.image:to-bytes image :p t) 'list) (aref source 0))))))
+
+(defun fixture-shared-raw-image-layouts ()
+  (loop for format in '("P" "RGB" "BGR" "RGBA" "ARGB" "BGRA" "RGBX") collect
+    (let* ((bytes (length format)) (count (* 6 bytes)))
+      (cffi:with-foreign-object (data :uint8 count)
+        (dotimes (i count) (setf (cffi:mem-aref data :uint8 i) (1+ i)))
+        (px:with-resource (image (px.image:from-buffer data '(3 2) format :byte-count count))
+          (setf (cffi:mem-aref data :uint8 (* 3 bytes)) 55)
+          (when (string= format "P") (px.surface:set-palette-at image 55 '(20 40 60)))
+          (let ((color (px.color:to-list (px.surface:get-at image '(0 1)))))
+            (px.surface:set-at image '(1 1) (if (string= format "P") 78 '(70 80 90 100)))
+            (list (px.surface:get-bitsize image) (px.surface:get-pitch image)
+                  (px.surface:get-masks image) color
+                  (loop for i below count collect (cffi:mem-aref data :uint8 i)))))))))
+
+(defun fixture-pixelcopy-masks-broadcasts-and-mapping ()
+  (let ((alpha-values
+          (loop for alpha in '(nil t) collect
+            (px.surface:with-surface (image '(1 1) :alpha alpha)
+              (px.surface:set-at image '(0 0) '(10 20 30 77))
+              (loop for blanket in '(nil 0 70 255) collect
+                (let ((target (make-array '(1 1) :element-type '(unsigned-byte 8))))
+                  (px.surface:set-alpha image blanket)
+                  (px.pixelcopy:surface-to-array target image :kind "A" :opaque 37)
+                  (aref target 0 0)))))))
+    (px.surface:with-surface (keyed '(2 1) :alpha t)
+      (px.surface:set-at keyed '(0 0) '(10 20 30 77))
+      (px.surface:set-at keyed '(1 0) '(10 20 30 255))
+      (px.surface:set-colorkey keyed '(10 20 30 255))
+      (let ((keys (make-array '(2 1) :element-type '(unsigned-byte 8)))
+            (source (make-array '(1 2 3) :element-type '(unsigned-byte 8)
+                                         :initial-contents '(((10 20 30) (40 50 60)))))
+            (destination (make-array '(3 2) :element-type '(unsigned-byte 32))))
+        (px.pixelcopy:surface-to-array keys keyed :kind "C" :opaque 31 :clear 4)
+        (px.surface:with-surface (format '(3 2))
+          (px.pixelcopy:map-array destination source format)
+          (px.pixelcopy:array-to-surface format source)
+          (list alpha-values (loop for x below 2 collect (list (aref keys x 0)))
+                (loop for x below 3 collect (loop for y below 2 collect (aref destination x y)))
+                (loop for y below 2 append (loop for x below 3 collect
+                  (px.color:to-list (px.surface:get-at format (list x y)))))
+                (px.surface:with-surface (source-pixel '(1 1) :alpha t)
+                  (px.surface:with-surface (target-pixel '(1 1) :alpha t)
+                    (px.surface:set-at source-pixel '(0 0) '(200 50 100 0))
+                    (loop for blanket in '(nil 255) collect
+                      (progn
+                        (px.surface:set-alpha source-pixel blanket)
+                        (px.surface:fill target-pixel '(10 20 30 255))
+                        (px.surface:blit target-pixel source-pixel '(0 0))
+                        (px.color:to-list (px.surface:get-at target-pixel '(0 0)))))))))))))
+
+(defun fixture-xbm-cursor-asset-loading ()
+  (let ((cursor (format nil "#define cue_width 8~%#define cue_height 8~%#define cue_x_hot 3~%#define cue_y_hot 5~%static unsigned char cue_bits[] = {~%0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80~%};~%"))
+        (mask (format nil "#define mask_width 8~%#define mask_height 8~%static char mask_bits[] = {~%0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff~%};~%")))
+    (multiple-value-bind (size hotspot data bits)
+        (px.cursors:load-xbm (make-string-input-stream cursor) (make-string-input-stream mask))
+      (list size hotspot (coerce data 'list) (coerce bits 'list)))))
+
 (defun fixture-buffer-proxy-byte-copies-and-writes ()
   (px.surface:with-surface (surface '(3 2) :alpha t)
     (loop for y below 2 do
@@ -1316,7 +1388,10 @@
              (fixture-weak-sprite-group-lifetimes) (fixture-freetype-padded-cells-and-colors)
              (fixture-ordered-system-font-matching)
              (fixture-buffer-proxy-byte-copies-and-writes)
-             (fixture-averaged-surfaces-and-generic-backend))))))))
+             (fixture-averaged-surfaces-and-generic-backend)
+             (fixture-indexed-raw-image-transfer) (fixture-shared-raw-image-layouts)
+             (fixture-pixelcopy-masks-broadcasts-and-mapping)
+             (fixture-xbm-cursor-asset-loading))))))))
 
 (defun emit-json-numbers (value)
   "Write JSON for the nested integer lists used by this fixture."

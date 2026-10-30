@@ -194,6 +194,10 @@ compute their result and can select a different palette entry.
   (px.surface:set-palette-at sprite 1 '(80 210 255)))
 ```
 
+`set-alpha` accepts NIL to disable alpha blending, including per-pixel alpha.
+Every octet value enables blending; 255 preserves per-pixel alpha without
+additional blanket attenuation. Pixel bytes remain unchanged in either case.
+
 `set-alpha` and `set-colorkey` accept an optional `:rle` boolean. When supplied,
 it enables or disables SDL's run-length encoding (RLE) blit hint; when omitted,
 the current hint is retained. `set-rle` changes the same hint directly and
@@ -527,6 +531,27 @@ Copied bytes do not pin the owner; close each view to release its lock.
 into specialized CL arrays. The array axes are **X, Y, channel**. `make-surface`
 and `blit-array` copy arrays back; `map-array` maps channels to packed pixels.
 `px.pixelcopy:surface-to-array` fills an existing correctly shaped array.
+Its `:kind` accepts `:pixels`, `:red`, `:green`, `:blue`, `:alpha`, or
+`:colorkey`, plus pygame's case-insensitive P/R/G/B/A/C character or string
+codes. P copies mapped pixels to a rank-two array or decoded RGB to an
+X/Y/3 array. Other kinds use X/Y arrays. C writes `:clear` (default 0) for an
+exact packed color-key match, including alpha bits, and `:opaque` (default 255)
+otherwise. A reads native pixel alpha when SDL blending is enabled (255 for
+formats without an alpha channel); when blending is disabled it uses `:opaque`.
+Blanket alpha does not multiply the copied pixel alpha.
+
+`px.surfarray:blit-array` and `px.pixelcopy:array-to-surface` broadcast singleton
+X or Y dimensions. A 1×H column, W×1 row, or 1×1 sample can fill a larger
+surface. Their raw writes ignore drawing clips. `px.pixelcopy:map-array`
+supports `(map-array destination channels format-surface)` for mapping into
+an existing X/Y packed array with the same broadcasting. Its original
+`(map-array format-surface channels)` form still returns a new packed array.
+The format surface's dimensions do not restrict the array dimensions.
+Mapping snapshots results before destination writes, so displaced source and
+destination arrays can overlap. Shapes, source values and destination element
+types are checked before any destination element changes. `:opaque` and
+`:clear` must be octets; copied integers must fit the destination Lisp type.
+
 Packed copies use octet, 16-bit, or 32-bit Lisp array elements, with 24-bit
 values stored in 32-bit elements. Color/channel copies decode palettes and
 lower-precision channels at any depth. `pixels2d` supports all depths except

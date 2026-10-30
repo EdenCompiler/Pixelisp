@@ -47,7 +47,29 @@ pygame can choose RLE compression and different transparency encoding.
     (px.surface:blit screen decoded '(40 60))))
 ```
 
-`from-string` and `from-bytes` copy packed pixel data into a new surface. `to-string` and `to-bytes` copy pixels out as a specialized `(unsigned-byte 8)` vector. Both functions take dimensions as `(width height)` and a channel order such as `:rgb`, `:rgba`, `:rgbx`, `:argb`, `:bgra`, or `:bgr`. A true `flipped` argument reverses row order. Alpha is 255 for formats without an alpha channel.
+`from-string` and `from-bytes` copy packed pixel data into a new surface.
+`to-string` and `to-bytes` copy pixels out as a specialized `(unsigned-byte 8)`
+vector. Imports take dimensions `(width height)` and a format such as `:p`,
+`:rgb`, `:rgba`, `:rgbx`, `:argb`, `:bgra`, or `:bgr`. Exports take the surface
+and format. A true `flipped` argument reverses row order. Alpha is 255 for
+formats without an alpha channel; RGBX imports have no per-pixel alpha mask.
+
+`P` bytes contain exact 8-bit palette indices, with no palette data or row
+padding. Copied P imports create an independent indexed surface with an
+all-white palette, matching pygame; install the asset's saved palette
+separately. P exports require an indexed 8-bit surface and preserve duplicate
+palette indices, ignoring clipping, color keys and blanket alpha. Other copied
+imports use Pixelisp's standard 32-bit drawing format. BGR copied imports are
+an extension to pygame 2.6.1, whose copied-byte loader rejects that format.
+
+```lisp
+(let ((indices (make-array 4 :element-type '(unsigned-byte 8)
+                            :initial-contents '(0 1 1 0))))
+  (px:with-resource (image (px.image:from-bytes indices '(2 2) :p))
+    (px.surface:set-palette image '((0 0 0) (255 180 60)))
+    (px.surface:set-colorkey image 0)
+    (px.surface:blit screen image '(40 60))))
+```
 
 Exports also accept `:rgba-premult` and `:argb-premult` (pygame's underscore
 spellings, such as `"RGBA_PREMULT"`, work too). Each RGB channel becomes
@@ -67,7 +89,18 @@ raw imports use the ordinary channel-order names.
     (px:dispose image)))
 ```
 
-`from-buffer` shares a foreign-memory allocation with SDL instead of copying it. Pass `:owner` to keep the allocation's owning Lisp object reachable. The allocation must be valid and writable until the surface is disposed; a moving Lisp vector is not suitable storage. Shared imports require a supported 32-bit byte order (`:rgba`, `:bgra`, `:argb`, or `:rgbx`). For ordinary Lisp vectors, use `from-string`.
+`from-buffer` shares a foreign-memory allocation with SDL instead of copying it.
+It accepts `:p`, `:rgb`, `:bgr`, `:rgba`, `:bgra`, `:argb`, and `:rgbx`.
+Rows are tightly packed with no alignment padding: a 3-pixel RGB row has a
+9-byte pitch. P imports start with an all-white palette. Channel masks follow
+the supplied byte order on either host endianness.
+
+Pass `:owner` to keep the allocation's owning Lisp object reachable, and
+`:byte-count` to validate its accessible size. A resource owner must be live;
+later owner disposal makes pixel access signal `disposed-resource`. Retaining
+an owner does not prevent its explicit disposal. The allocation must remain
+valid and writable until surface disposal, which frees only SDL metadata.
+For ordinary Lisp vectors, use `from-string`.
 
 `get-sdl-image-version` reports the linked SDL_image version. `get-extended` reports that the extended image codecs are available through the linked library.
 

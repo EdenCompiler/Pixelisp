@@ -18,12 +18,12 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `display` | `px.display` | Default window/framebuffer, selected monitor and desktop sizing, closest-mode queries, visibility/minimized state, presentation, partial updates, resizing, fullscreen, captions/icons, driver/display/mode queries, iconify request, screensaver control |
 | `draw`, `draw_py` | `px.draw` | Filled/outlined primitives, native packed integer colors, independent fitted rectangle corner radii, clipping, antialiased lines, damaged bounds |
 | `gfxdraw` | `px.gfxdraw` | Surface-based primitives, antialiasing, textured polygons, Bézier curves |
-| `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams with optional decoded format/palette preservation; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; raw and premultiplied pixel byte exports and shared 32-bit foreign imports |
+| `image`, `imageext` | `px.image` | SDL_image loading from paths, encoded octets and binary streams with optional decoded format/palette preservation; PNG/JPEG/BMP/TGA saving to paths, streams and encoded vectors; indexed P/raw/premultiplied byte exports and shared tightly packed 8/24/32-bit foreign imports |
 | `transform` | `px.transform` | Native format/index-preserving flip, nearest scaling, rotation, scale2x and chop; 24/32-bit smooth scaling with the generic backend, RGBA32 rotozoom, palette-aware surface averaging, color operations, thresholding, Laplacian edges |
 | `event` | `px.event` | Native event copying including mouse device/window identity, touch origin and precise wheel deltas; include/exclude retrieval with optional pumping, filtering/queries/names, independent window mouse/keyboard grabs, Lisp payloads, custom types, thread-safe posting, polling/waiting |
 | `key` | `px.key` | Scancode state, keyword names, modifiers, focus, text-input controls and configurable pump-delivered native key repeat |
 | `mouse` | `px.mouse` | Position, relative movement, buttons, visibility, focus, relative mode |
-| `cursors`, `Cursor` | `px.cursors` | System/color/bitmap cursors and ASCII bitmap compilation |
+| `cursors`, `Cursor` | `px.cursors` | System/color/bitmap cursors, ASCII bitmap compilation, and validated XBM asset decoding from paths or borrowed character streams |
 | `joystick` | `px.joystick` | Enumeration, hardware GUIDs, power-level reports, axes/buttons/hats/balls, lifetime, rumble |
 | `_sdl2.controller` | `px.controller`, `px.sdl2.controller` | Independent joystick/controller bridges, editable mapping hashes, index names, native event-state controls, normalized axes/buttons, hotplug/remap events, rumble and touchpads |
 | `_sdl2.touch` | `px.touch`, `px.sdl2.touch` | Device/finger enumeration and normalized touch events |
@@ -38,7 +38,7 @@ The exported Lisp symbols and module API guides describe the actual interface.
 | `midi`, `pypm` | `px.midi` | PortMidi device streams, timestamps, SysEx, filters, note helpers and event conversion |
 | `sndarray` | `px.sndarray` | Integer PCM and float32 copied sample arrays/live views, sound creation from arrays |
 | `surfarray` | `px.surfarray` | Packed/RGB/channel copies across native depths, packed views except 24-bit, full byte-channel views at 24/32-bit, array-to-surface operations |
-| `pixelcopy` | `px.pixelcopy` | Copy into existing arrays and map pixel formats |
+| `pixelcopy` | `px.pixelcopy` | Packed/RGB/channel/color-key copies into existing arrays, custom clear/opaque values, singleton-axis broadcasts, and pixel-format mapping into new or existing arrays with overlap snapshots |
 | `PixelArray`, `pixelarray` | `px.pixelarray` | Packed shared views, 1D rows/columns, metadata, color setters, scalar fills, broadcast assignment with overlap snapshots, slices/transposes, weighted replace/extract/compare and format-aware surface copies; selection/comparison results are CL bit arrays |
 | `BufferProxy`, `bufferproxy`, `newbuffer` | `px.buffer`, `px.bufferproxy` | Owner-backed views, bounds/lifetime checks, explicit release and slicing; native-order octet copies for contiguous integer/float views, bounded partial writes and overlap-safe source snapshots |
 | `camera`, camera backends | `px.camera` | Linux V4L2 enumeration/capture, negotiated resolution, queried controls, RGB/HSV/YUV conversions |
@@ -83,6 +83,28 @@ The exported Lisp symbols and module API guides describe the actual interface.
   rejects that depth as pygame does. Copied 24-bit values use 32-bit arrays.
   Nonempty surfaces and the documented native depths are supported; other
   bit depths or mask layouts signal explicit errors.
+- Raw P image assets carry indices separately from their palettes. Their imports
+  start with all-white entries, matching pygame. Other copied image imports stay
+  in Pixelisp's 32-bit drawing format; copied BGR is supported beyond pygame
+  2.6.1's copied-byte loader. Shared foreign imports retain tight 8/24/32-bit
+  layouts, validate optional byte counts, and retain caller-owned memory owners.
+  Explicit owner disposal is still the caller's responsibility. Native masks
+  describe the requested byte order on either host endianness.
+- Pixelcopy uses ordinary Lisp arrays, so values must fit the destination
+  element type; invalid stores are rejected before mutation. P accepts X/Y
+  packed arrays or X/Y/3 RGB arrays, while other copy kinds use X/Y arrays.
+  Color-key masks compare complete native integers, including alpha bits;
+  duplicate-color palette indices remain distinct. Alpha copies follow SDL
+  blending state and do not apply blanket modulation. Indexed color channels
+  are decoded through the palette as an extension to pygame's native-plane
+  restrictions. Singleton spatial axes broadcast in pixel transfers/mapping.
+- XBM cursor loading reverses the file's LSB-first bits into SDL bitmap order.
+  Paths and borrowed character streams are supported; omitted masks are fully
+  opaque. The latter follows the documented convenience beyond pygame 2.6.1's
+  two-argument Python implementation. Dimensions, hotspot bounds, byte counts
+  and paired mask sizes are validated. Width must be divisible by eight;
+  any positive height is accepted, matching SDL and Pixelisp's bitmap constructor.
+  Legacy short-array XBM initializers are unsupported.
 - Buffer `raw` returns an independent specialized octet vector in native byte
   order for contiguous C- or Fortran-layout integer, single-float and
   double-float views. Gapped or reversed views must be copied with `to-array`
@@ -276,6 +298,13 @@ parenting and input-only focus. Echo Grove's gameplay test follows a cue from
 its bright frame through its averaged afterglow to the player's turn.
 An optional differential
 script checks selected geometry/pixel/mask behavior against pygame 2.6.1.
+Raw image fixtures cover P index preservation, white default palettes, flipped
+rows and tight shared pitches/channel masks. Pixelcopy fixtures cover SDL alpha
+enable/disable state, full packed-key matching, singleton RGB broadcasts and
+destination-array mapping. Lisp tests additionally check cropped exports,
+independent copies, disposed owners and overlapping displaced arrays. XBM tests
+cover paths, borrowed streams, bit order, optional masks and malformed C data.
+Prism Breaker's asset test checks transparent indexed corners and paddle shading.
 The retained-text fixture compares immediate reuse. The local pygame build's
 rotated-layout cache is unstable when a metrics query interrupts reuse;
 Pixelisp tests that sequence independently without depending on the cache.

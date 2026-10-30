@@ -1,6 +1,23 @@
 (in-package #:pixelisp.examples.tests)
 (in-suite examples)
 
+(test prism-breaker-indexed-ball-and-broadcast-paddle-assets
+  (px:with-init (:video nil)
+    (px:with-resource (ball (px.examples::%breaker-ball-image))
+      (is (= 8 (px.surface:get-bitsize ball)))
+      (is (= 0 (px.surface:get-at-mapped ball '(0 0))))
+      (is (= 1 (px.surface:get-at-mapped ball '(8 13))))
+      (is (= 2 (px.surface:get-at-mapped ball '(6 6))))
+      (px.surface:with-surface (screen '(16 16))
+        (px.surface:fill screen '(20 30 40))
+        (px.surface:blit screen ball '(0 0))
+        (is (equal '(20 30 40 255) (px.color:to-list (px.surface:get-at screen '(0 0)))))))
+    (px.surface:with-surface (paddle '(104 16) :alpha t)
+      (px.examples::%breaker-paddle-gradient paddle)
+      (is (equal '(64 224 244 255) (px.color:to-list (px.surface:get-at paddle '(0 0)))))
+      (is (equal '(44 154 168 255) (px.color:to-list (px.surface:get-at paddle '(103 15)))))
+      (is-false (px.surface:locked-p paddle)))))
+
 (test prism-breaker-stick-dead-zone-keeps-resting-input-still
   (is (= 0 (px.examples::%breaker-stick 0.1d0)))
   (is (= 0 (px.examples::%breaker-stick -0.1d0)))

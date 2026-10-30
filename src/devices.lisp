@@ -245,7 +245,7 @@
 
 (defpackage #:pixelisp.cursors
   (:nicknames #:px.cursors) (:use #:cl) (:shadow #:close)
-  (:export #:cursor #:system-cursor #:color-cursor #:bitmap-cursor #:set-cursor #:get-cursor #:close #:compile-cursor #:system-cursors))
+  (:export #:cursor #:system-cursor #:color-cursor #:bitmap-cursor #:set-cursor #:get-cursor #:close #:load-xbm #:compile-cursor #:system-cursors))
 (in-package #:pixelisp.cursors)
 (cffi:defcfun ("SDL_CreateSystemCursor" %system) :pointer (id :int))
 (cffi:defcfun ("SDL_CreateColorCursor" %color) :pointer (surface :pointer) (x :int) (y :int))

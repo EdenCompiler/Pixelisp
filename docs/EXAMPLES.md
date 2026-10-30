@@ -45,6 +45,10 @@ keep other controllers' buttons from serving the ball. Device removal closes
 the old controller and allows another connected pad to take over; additions
 enable play without restarting. One-dimensional PixelArray rows and slices
 paint the paddle's highlights before its first blit.
+The paddle's vertical shading broadcasts a single RGB column through
+`px.pixelcopy:array-to-surface`. Its ball is a compact `P` byte asset with a
+separate palette and transparent index, showing how indexed assets participate
+in the same gameplay blits as truecolor art.
 
 Orbit Patrol unpacks its thrust velocity with `px.math:swizzle`. Crater Command
 erases terrain alpha through `px.surface:get-view` while updating the collision

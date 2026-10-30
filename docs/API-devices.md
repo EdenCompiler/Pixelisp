@@ -46,6 +46,34 @@ resolve the current enumeration index from the stable instance ID, so removal
 of an earlier device does not select the wrong controller. Detached or unmapped
 devices signal `px:error`; wrong object kinds signal type errors.
 
+## XBM bitmap cursors
+
+`px.cursors:load-xbm` reads the conventional XBM bitmap subset without
+initializing SDL. It returns four values in cursor-argument order:
+`(width height)`, `(hot-x hot-y)`, SDL-ready data octets, and mask octets.
+Pass them directly to `px.cursors:bitmap-cursor`:
+
+```lisp
+(multiple-value-bind (size hotspot data mask)
+    (px.cursors:load-xbm "assets/pointer.xbm" "assets/pointer-mask.xbm")
+  (px:with-resource (cursor (px.cursors:bitmap-cursor size data mask hotspot))
+    (px.cursors:set-cursor cursor)))
+```
+
+Sources may be pathnames, path strings, or character streams. A supplied
+stream is read from its current position through EOF and remains open. The
+optional mask source supports XBM assets that store cursor data and opacity
+separately; without it, every pixel is treated as opaque. XBM stores pixels
+least-significant-bit first, so returned bytes are bit-reversed for SDL.
+Dimensions, hotspot, byte count, and paired-mask dimensions are checked before
+any cursor is created. Hotspot defaults to `(0 0)`. Pixelisp requires a
+positive width divisible by eight, matching its SDL bitmap-cursor row layout,
+and accepts any positive height supported by SDL. The pygame 2.6.1 cursor
+reference describes bitmap cursor heights as multiples of eight, though its
+`load_xbm` parser does not validate them. Pixelisp also validates complete
+initializers and hotspot bounds, which pygame's permissive parser leaves to
+later cursor creation.
+
 ```lisp
 (when (px.controller:controller-p 0)
   (px.joystick:with-joystick (original 0)

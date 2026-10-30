@@ -736,8 +736,10 @@ https://www.pygame.org/docs/ref/surface.html#pygame.Surface.set_alpha."
   (when rle-p (%validate-rle-change surface rle 'set-alpha))
   (when rle-p (set-rle surface rle))
   (sdl2:set-alpha-mod (pixelisp.internal:handle surface) (or alpha 255))
+  ;; NIL explicitly disables blending, including per-pixel alpha. Every byte
+  ;; value enables it: 255 still means an alpha-enabled source in pygame.
   (pixelisp.internal::%set-blend (pixelisp.internal::%ptr (pixelisp.internal:handle surface))
-                               (if (or (alpha-p surface) (and alpha (< alpha 255))) 1 0))
+                               (if alpha 1 0))
   (setf (alpha-value surface) alpha))
 (defun %native-colorkey (surface)
   "Return the native transparent pixel/index, or NIL when keying is disabled."
